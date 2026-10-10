@@ -1,0 +1,103 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: PYTHONPATH=. pytest -q
+
+      - name: Validate Python syntax
+        run: python -m compileall app tests
+
+  infrastructure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: opentofu/setup-opentofu@v1
+
+      - name: Validate Azure infrastructure
+        working-directory: infra/azure
+        run: |
+          tofu fmt -check
+          tofu init -backend=false -input=false
+          tofu validate
+
+      - name: Validate GCP infrastructure
+        working-directory: infra/gcp
+        run: |
+          tofu fmt -check
+          tofu init -backend=false -input=false
+          tofu validate
+
+  container:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build --tag multi-cloud-app:${{ github.sha }} .
+
+      - name: Smoke test image
+        run: |
+          set -euo pipefail
+          docker run --detach --name multi-cloud-app-ci --publish 8000:8000 multi-cloud-app:${{ github.sha }}
+          trap 'docker rm --force multi-cloud-app-ci >/dev/null 2>&1 || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8000/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs multi-cloud-app-ci
+          exit 1
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, infrastructure, container]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Create release metadata
+        run: |
+          mkdir -p release-metadata
+          cat > release-metadata/release.json <<EOF
+          {
+            "repository": "${{ github.repository }}",
+            "sha": "${{ github.sha }}",
+            "ref": "${{ github.ref_name }}",
+            "workflow_run_id": "${{ github.run_id }}",
+            "status": "validated",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-metadata-${{ github.sha }}
+          path: release-metadata/release.json

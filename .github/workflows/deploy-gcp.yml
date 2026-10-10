@@ -1,0 +1,94 @@
+name: Deploy to GCP
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub Environment used for deployment protection
+        required: true
+        default: dev
+        type: choice
+        options: [dev, prod]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-gcp-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      GCP_REPOSITORY: ${{ vars.GCP_REPOSITORY }}
+      GCP_SERVICE_NAME: ${{ vars.GCP_SERVICE_NAME }}
+      TF_STATE_BUCKET: ${{ vars.GCP_TF_STATE_BUCKET }}
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required configuration
+        run: |
+          set -euo pipefail
+          for value in GCP_PROJECT_ID GCP_REGION GCP_REPOSITORY GCP_SERVICE_NAME TF_STATE_BUCKET; do
+            test -n "${!value}" || { echo "::error::$value is not configured in the ${{ inputs.environment }} environment"; exit 1; }
+          done
+          test -n "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" || { echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER is missing"; exit 1; }
+          test -n "${{ secrets.GCP_SERVICE_ACCOUNT }}" || { echo "::error::GCP_SERVICE_ACCOUNT is missing"; exit 1; }
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - uses: opentofu/setup-opentofu@v1
+
+      - name: Initialize infrastructure state
+        working-directory: infra/gcp
+        run: tofu init -input=false -backend-config="bucket=${TF_STATE_BUCKET}" -backend-config="prefix=${GCP_SERVICE_NAME}/${{ inputs.environment }}"
+
+      - name: Provision Artifact Registry
+        working-directory: infra/gcp
+        env:
+          TF_VAR_project_id: ${{ env.GCP_PROJECT_ID }}
+          TF_VAR_region: ${{ env.GCP_REGION }}
+          TF_VAR_repository_id: ${{ env.GCP_REPOSITORY }}
+        run: |
+          tofu apply -input=false -auto-approve \
+            -target=google_artifact_registry_repository.app_repo
+
+      - name: Build and push image
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+          image="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_REPOSITORY}/multi-cloud-app:${IMAGE_TAG}"
+          docker build --tag "$image" .
+          docker push "$image"
+          echo "IMAGE_URI=$image" >> "$GITHUB_ENV"
+
+      - name: Deploy Cloud Run with Terraform
+        working-directory: infra/gcp
+        env:
+          TF_VAR_project_id: ${{ env.GCP_PROJECT_ID }}
+          TF_VAR_region: ${{ env.GCP_REGION }}
+          TF_VAR_repository_id: ${{ env.GCP_REPOSITORY }}
+          TF_VAR_service_name: ${{ env.GCP_SERVICE_NAME }}
+          TF_VAR_image_tag: ${{ env.IMAGE_TAG }}
+          TF_VAR_image_name: multi-cloud-app
+        run: tofu apply -input=false -auto-approve
+
+      - name: Smoke test deployment
+        run: |
+          url="$(gcloud run services describe "$GCP_SERVICE_NAME" --region "$GCP_REGION" --format='value(status.url)')"
+          curl --fail --silent "$url/health"
+          echo "Cloud Run URL: $url"

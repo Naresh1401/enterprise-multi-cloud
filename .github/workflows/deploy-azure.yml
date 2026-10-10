@@ -1,0 +1,104 @@
+name: Deploy to Azure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub Environment used for deployment protection
+        required: true
+        default: dev
+        type: choice
+        options: [dev, prod]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-azure-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+      AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+      AZURE_CONTAINER_APP_ENV: ${{ vars.AZURE_CONTAINER_APP_ENV }}
+      AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+      TF_STATE_STORAGE_ACCOUNT: ${{ vars.AZURE_TF_STATE_STORAGE_ACCOUNT }}
+      TF_STATE_CONTAINER: ${{ vars.AZURE_TF_STATE_CONTAINER }}
+      TF_STATE_RESOURCE_GROUP: ${{ vars.AZURE_TF_STATE_RESOURCE_GROUP }}
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required configuration
+        run: |
+          set -euo pipefail
+          for value in AZURE_RESOURCE_GROUP AZURE_LOCATION AZURE_ACR_NAME AZURE_CONTAINER_APP_ENV AZURE_CONTAINER_APP_NAME TF_STATE_STORAGE_ACCOUNT TF_STATE_CONTAINER TF_STATE_RESOURCE_GROUP; do
+            test -n "${!value}" || { echo "::error::$value is not configured in the ${{ inputs.environment }} environment"; exit 1; }
+          done
+          test -n "${{ secrets.AZURE_CLIENT_ID }}" || { echo "::error::AZURE_CLIENT_ID is missing"; exit 1; }
+          test -n "${{ secrets.AZURE_TENANT_ID }}" || { echo "::error::AZURE_TENANT_ID is missing"; exit 1; }
+          test -n "${{ secrets.AZURE_SUBSCRIPTION_ID }}" || { echo "::error::AZURE_SUBSCRIPTION_ID is missing"; exit 1; }
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: opentofu/setup-opentofu@v1
+
+      - name: Initialize infrastructure state
+        working-directory: infra/azure
+        run: |
+          tofu init -input=false \
+            -backend-config="resource_group_name=${TF_STATE_RESOURCE_GROUP}" \
+            -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
+            -backend-config="container_name=${TF_STATE_CONTAINER}" \
+            -backend-config="key=multi-cloud-app/${{ inputs.environment }}.tfstate"
+
+      - name: Provision Azure registry and platform
+        working-directory: infra/azure
+        env:
+          TF_VAR_resource_group_name: ${{ env.AZURE_RESOURCE_GROUP }}
+          TF_VAR_location: ${{ env.AZURE_LOCATION }}
+          TF_VAR_acr_name: ${{ env.AZURE_ACR_NAME }}
+          TF_VAR_container_app_environment_name: ${{ env.AZURE_CONTAINER_APP_ENV }}
+          TF_VAR_container_app_name: ${{ env.AZURE_CONTAINER_APP_NAME }}
+        run: |
+          tofu apply -input=false -auto-approve \
+            -target=azurerm_resource_group.rg \
+            -target=azurerm_log_analytics_workspace.logs \
+            -target=azurerm_container_registry.acr \
+            -target=azurerm_container_app_environment.cae
+
+      - name: Build and push image
+        run: |
+          set -euo pipefail
+          az acr login --name "$AZURE_ACR_NAME"
+          image="${AZURE_ACR_NAME}.azurecr.io/multi-cloud-app:${IMAGE_TAG}"
+          docker build --tag "$image" .
+          docker push "$image"
+
+      - name: Deploy Azure Container App with Terraform
+        working-directory: infra/azure
+        env:
+          TF_VAR_resource_group_name: ${{ env.AZURE_RESOURCE_GROUP }}
+          TF_VAR_location: ${{ env.AZURE_LOCATION }}
+          TF_VAR_acr_name: ${{ env.AZURE_ACR_NAME }}
+          TF_VAR_container_app_environment_name: ${{ env.AZURE_CONTAINER_APP_ENV }}
+          TF_VAR_container_app_name: ${{ env.AZURE_CONTAINER_APP_NAME }}
+          TF_VAR_image_tag: ${{ env.IMAGE_TAG }}
+        run: tofu apply -input=false -auto-approve
+
+      - name: Smoke test deployment
+        run: |
+          fqdn="$(az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)"
+          curl --fail --silent "https://${fqdn}/health"
+          echo "Azure Container App URL: https://${fqdn}"
