@@ -31,6 +31,14 @@ locals {
     service     = var.service_name
   })
   https = var.certificate_arn != ""
+  # Settings both containers share; the TLS certificate check uses the RDS roots in the image
+  database_environment = [
+    { name = "APP_ENV", value = var.environment },
+    { name = "AWS_REGION", value = var.region },
+    { name = "DB_HOST", value = module.database.address },
+    { name = "DB_PORT", value = tostring(module.database.port) },
+    { name = "DB_NAME", value = module.database.database_name },
+  ]
 }
 
 data "aws_availability_zones" "available" {
@@ -48,6 +56,23 @@ module "vpc" {
   private_subnets    = [for i in range(2) : cidrsubnet(var.vpc_cidr, 4, i + 8)]
   enable_nat_gateway = true
   single_nat_gateway = var.environment != "prod"
+
+  # Subnets for the database only, with no route to the internet
+  database_subnets             = [for i in range(2) : cidrsubnet(var.vpc_cidr, 8, 192 + i)]
+  create_database_subnet_group = false
+}
+
+# PostgreSQL that only the tasks can reach. The service signs in with IAM tokens; the
+# migration container signs in as the RDS administrator.
+module "database" {
+  source = "../modules/aws-database"
+
+  name                      = local.name
+  environment               = var.environment
+  vpc_id                    = module.vpc.vpc_id
+  subnet_ids                = module.vpc.database_subnets
+  client_security_group_ids = [aws_security_group.task.id]
+  instance_class            = var.database_instance_class
 }
 
 # Phase 1 of a deployment applies only this, so the image can be pushed before the service exists
@@ -117,6 +142,26 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# ECS reads the RDS administrator's password when a task starts and hands it to the migrate
+# container only; the app container never sees it, and the task role can't read it
+resource "aws_iam_role_policy" "execution_admin_secret" {
+  name   = "database-admin-secret"
+  role   = aws_iam_role.execution.id
+  policy = module.database.admin_secret_policy_json
+}
+
+# The containers' own identity: it may only sign in to the database as app_user
+resource "aws_iam_role" "task" {
+  name               = "${local.name}-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+}
+
+resource "aws_iam_role_policy" "task_database" {
+  name   = "database-connect"
+  role   = aws_iam_role.task.id
+  policy = module.database.connect_policy_json
+}
+
 resource "aws_ecs_task_definition" "app" {
   family                   = local.name
   requires_compatibilities = ["FARGATE"]
@@ -124,33 +169,63 @@ resource "aws_ecs_task_definition" "app" {
   cpu                      = var.task_cpu
   memory                   = var.task_memory
   execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = aws_iam_role.task.arn
 
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture        = "X86_64"
   }
 
-  container_definitions = jsonencode([{
-    name      = "app"
-    image     = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
-    essential = true
-    portMappings = [{
-      containerPort = 8000
-      protocol      = "tcp"
-    }]
-    environment = [
-      { name = "APP_ENV", value = var.environment },
-      { name = "APP_VERSION", value = var.image_tag },
-    ]
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        awslogs-group         = aws_cloudwatch_log_group.app.name
-        awslogs-region        = var.region
-        awslogs-stream-prefix = "app"
+  # Each task runs the migrations before its app container starts; the advisory lock and
+  # Alembic's history make every run after the first a no-op
+  container_definitions = jsonencode([
+    {
+      name      = "migrate"
+      image     = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
+      essential = false
+      command   = ["python", "-m", "app.migrate"]
+      environment = concat(local.database_environment, [
+        { name = "DB_AUTH", value = "password" },
+        { name = "DB_USER", value = module.database.admin_username },
+        { name = "DB_APP_AUTH", value = "aws-iam" },
+        { name = "DB_APP_ROLE", value = module.database.app_role },
+      ])
+      secrets = [
+        { name = "DB_PASSWORD", valueFrom = "${module.database.admin_secret_arn}:password::" },
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.app.name
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "migrate"
+        }
       }
-    }
-  }])
+    },
+    {
+      name      = "app"
+      image     = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
+      essential = true
+      dependsOn = [{ containerName = "migrate", condition = "SUCCESS" }]
+      portMappings = [{
+        containerPort = 8000
+        protocol      = "tcp"
+      }]
+      environment = concat(local.database_environment, [
+        { name = "APP_VERSION", value = var.image_tag },
+        { name = "DB_AUTH", value = "aws-iam" },
+        { name = "DB_USER", value = module.database.app_role },
+      ])
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.app.name
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "app"
+        }
+      }
+    },
+  ])
 }
 
 resource "aws_security_group" "alb" {
@@ -191,6 +266,15 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_tasks" {
   referenced_security_group_id = aws_security_group.task.id
   from_port                    = 8000
   to_port                      = 8000
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_egress_rule" "task_database" {
+  security_group_id            = aws_security_group.task.id
+  description                  = "PostgreSQL"
+  referenced_security_group_id = module.database.security_group_id
+  from_port                    = 5432
+  to_port                      = 5432
   ip_protocol                  = "tcp"
 }
 

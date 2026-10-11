@@ -54,10 +54,27 @@ variable "image_tag" {
   }
 }
 
-variable "runtime_service_account" {
+variable "migration_token" {
   type        = string
   default     = ""
-  description = "Service account the Cloud Run service runs as; empty uses the default compute service account"
+  description = "A new value runs the migration job during the apply (the deploy workflow passes its run ID); empty runs nothing"
+
+  validation {
+    condition     = can(regex("^[a-z0-9-]*$", var.migration_token))
+    error_message = "migration_token may only hold lowercase letters, digits and hyphens."
+  }
+}
+
+variable "subnet_cidr" {
+  type        = string
+  default     = "10.50.0.0/24"
+  description = "Subnet the service and the migration job send private traffic from"
+}
+
+variable "database_tier" {
+  type        = string
+  default     = "db-custom-1-3840"
+  description = "Cloud SQL machine type; db-custom-1-3840 allows 100 connections"
 }
 
 variable "min_instances" {
@@ -75,7 +92,7 @@ variable "max_instances" {
 variable "deletion_protection" {
   type        = bool
   default     = true
-  description = "Block OpenTofu from deleting the Cloud Run service"
+  description = "Block deleting the Cloud Run service, the migration job and the Cloud SQL instance"
 }
 
 variable "labels" {

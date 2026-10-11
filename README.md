@@ -8,11 +8,11 @@ security gates from [github-cicd-workflows](https://github.com/Naresh1401/github
 the shared CI that all of my repositories use. Every deployment is a manually dispatched,
 OIDC-authenticated OpenTofu run that finishes only when the new commit is the one serving traffic.
 
-| Cloud | Serverless containers | Kubernetes (one Helm chart) |
-| --- | --- | --- |
-| AWS | ECS Fargate behind an Application Load Balancer | EKS Auto Mode |
-| Google Cloud | Cloud Run | GKE Autopilot |
-| Azure | Container Apps | AKS |
+| Cloud | Serverless containers | Kubernetes (one Helm chart) | Database |
+| --- | --- | --- | --- |
+| AWS | ECS Fargate behind an Application Load Balancer | EKS Auto Mode | Amazon RDS for PostgreSQL |
+| Google Cloud | Cloud Run | GKE Autopilot | Cloud SQL for PostgreSQL |
+| Azure | Container Apps | AKS | Azure Database for PostgreSQL |
 
 ```text
 Push or pull request (shared workflows from github-cicd-workflows)
@@ -27,10 +27,11 @@ Push or pull request (shared workflows from github-cicd-workflows)
 
 Manual deployment (dev or prod)
   -> OIDC sign-in, no stored cloud keys
-  -> OpenTofu: the registry first, then the platform or cluster
+  -> OpenTofu: the registry first, then the platform or cluster and its private PostgreSQL
   -> build and push the image tagged with the commit SHA
+  -> migrate the database with a one-off job and its own identity
   -> Cloud Run / Container Apps / ECS service, or helm upgrade on GKE / AKS / EKS
-  -> poll /health until it reports the deployed commit
+  -> poll /ready until it reports the deployed commit and a working database
 ```
 
 The design and its trade-offs are in [docs/architecture.md](docs/architecture.md).
@@ -100,7 +101,6 @@ To try the Kubernetes chart on a local kind cluster, see
 | `GCP_TF_STATE_BUCKET` | variable | existing versioned GCS bucket |
 | `GCP_REPOSITORY` | variable | Cloud Run only; Artifact Registry repository, one per environment |
 | `GCP_SERVICE_NAME` | variable | Cloud Run only; service name |
-| `GCP_RUNTIME_SERVICE_ACCOUNT` | variable | Cloud Run only, optional; service account Cloud Run runs as |
 | `GCP_WORKLOAD_IDENTITY_PROVIDER` | secret | full provider resource name |
 | `GCP_SERVICE_ACCOUNT` | secret | deployer service account email |
 
@@ -132,12 +132,14 @@ docker-compose.yml           The service, PostgreSQL and the migration job, for 
 gunicorn.conf.py             Production server settings (honours PORT)
 Dockerfile                   Pinned base image, non-root user, healthcheck
 deploy/helm/multi-cloud-app/ Helm chart, with values for GKE, AKS and EKS
-infra/aws/                   VPC, ECR, ECS Fargate service and load balancer (OpenTofu)
-infra/gcp/                   Artifact Registry and Cloud Run (OpenTofu)
-infra/azure/                 ACR, Container Apps and the pull identity (OpenTofu)
-infra/eks/                   VPC, EKS Auto Mode cluster and ECR (OpenTofu)
-infra/gke/                   VPC, Cloud NAT, GKE Autopilot cluster and Artifact Registry (OpenTofu)
-infra/aks/                   AKS cluster and ACR (OpenTofu)
+infra/aws/                   VPC, ECR, RDS, ECS Fargate service and load balancer (OpenTofu)
+infra/gcp/                   Artifact Registry, VPC, Cloud SQL, the migration job and Cloud Run (OpenTofu)
+infra/azure/                 Virtual network, ACR, PostgreSQL, Container Apps and its migration job (OpenTofu)
+infra/eks/                   VPC, EKS Auto Mode cluster, ECR and RDS (OpenTofu)
+infra/gke/                   VPC, Cloud NAT, GKE Autopilot cluster, Artifact Registry and Cloud SQL (OpenTofu)
+infra/aks/                   Virtual network, AKS cluster, ACR and PostgreSQL (OpenTofu)
+infra/modules/               The PostgreSQL setup for each cloud, shared by its two targets
+deploy/kind/                 A throwaway PostgreSQL for installing the chart on kind
 .github/workflows/           ci.yml (shared gates) and one deploy workflow per platform
 trivy.yaml                   Misconfiguration scan settings
 docs/                        Architecture, deployment runbooks, production checklist
@@ -147,6 +149,9 @@ scripts/                     Local pipeline and bootstrap checklists
 ## Safeguards
 
 - No long-lived cloud credentials: all three clouds trust GitHub's OIDC token.
+- No database passwords for the service: it signs in to PostgreSQL with its platform's identity,
+  and only the migration job's identity can change the schema. Every database is private and
+  verified over TLS.
 - Nothing deploys on push; deployments are dispatched and environment-protected.
 - Every third-party action is pinned to a full commit SHA.
 - The base image is pinned by digest, and Dependabot keeps pins current.
@@ -158,7 +163,7 @@ scripts/                     Local pipeline and bootstrap checklists
 
 ## Costs
 
-Clusters, NAT gateways and load balancers bill while they exist, even when idle. To remove a
+Clusters, databases, NAT gateways and load balancers bill while they exist, even when idle. To remove a
 target, run `tofu destroy` in its `infra/` folder with the same backend settings and variables the
 workflow uses. GKE clusters have deletion protection on by default; set `deletion_protection =
 false` and apply before destroying.

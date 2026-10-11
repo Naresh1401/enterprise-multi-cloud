@@ -49,12 +49,16 @@ publicly trusted certificates. The Cloud SQL connector does its own verification
 
 | Platform | Database | The service's identity | Migrations run as |
 | --- | --- | --- | --- |
+| ECS Fargate | Amazon RDS, in database subnets that only the tasks' security group reaches | The task role | A `migrate` container that each task runs before its app container. ECS hands it the RDS administrator's password from Secrets Manager; the app container never sees it |
+| Cloud Run | Cloud SQL, private IP only, reached through Direct VPC egress | Its own service account | A Cloud Run job with its own service account, which OpenTofu runs and waits for before it updates the service |
+| Container Apps | Azure Database for PostgreSQL flexible server in the environment's virtual network | A user-assigned managed identity | A Container Apps job whose managed identity is the server's Entra administrator; the deploy workflow starts it and waits for it |
 | EKS | Amazon RDS, in database subnets with no internet route | IAM role through EKS Pod Identity | A Helm hook Job with its own Pod Identity role, which may only read the RDS administrator's secret |
 | GKE | Cloud SQL, private IP only, connector connections only | Google service account through Workload Identity Federation | A Helm hook Job with its own service account (`cloudsqlsuperuser`) |
 | AKS | Azure Database for PostgreSQL flexible server, delegated subnet, Entra sign-in only | Managed identity through Microsoft Entra Workload ID | A Helm hook Job whose managed identity is the server's Entra administrator |
 
-[kubernetes-deployment.md](kubernetes-deployment.md#the-databases) describes what OpenTofu
-creates for each.
+[kubernetes-deployment.md](kubernetes-deployment.md#the-databases) and the
+[AWS](aws-deployment.md), [Google Cloud](gcp-deployment.md) and [Azure](azure-deployment.md)
+guides describe what OpenTofu creates for each.
 
 ## Roles
 

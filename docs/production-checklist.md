@@ -17,7 +17,8 @@ Use this before treating a deployment as production.
 - [ ] The AWS deploy role trusts only `repo:<owner>/<repo>:environment:dev` and `...:prod`,
       and outside a sandbox account its policy is limited to the services it deploys
 - [ ] No cloud keys or client secrets are stored in GitHub
-- [ ] Cloud Run runs as a dedicated runtime service account (`GCP_RUNTIME_SERVICE_ACCOUNT`)
+- [ ] The deploy identities' role-granting permissions stay limited to the roles OpenTofu
+      grants (`AcrPull` and Network Contributor on Azure, the two Cloud SQL roles on Google Cloud)
 
 ## State and infrastructure
 
