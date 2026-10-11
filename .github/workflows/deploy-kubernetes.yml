@@ -109,6 +109,9 @@ jobs:
         run: |
           {
             echo "TF_VAR_environment=${DEPLOY_ENV}"
+            # The workload identities trust the service accounts the release creates
+            echo "TF_VAR_kubernetes_namespace=${NAMESPACE}"
+            echo "TF_VAR_release_name=${RELEASE}"
             case "$CLOUD" in
               gke)
                 echo "TF_VAR_project_id=${GCP_PROJECT_ID}"
@@ -178,12 +181,15 @@ jobs:
                 -backend-config="region=${AWS_REGION}" ;;
           esac
 
-      # The cluster and its registry: the first run creates them, later runs apply changes
+      # The cluster, its registry and its database: the first run creates them, later runs
+      # apply changes
       - name: Create or update the cluster
         working-directory: infra/${{ inputs.cloud }}
         run: |
           tofu apply -auto-approve
           echo "CLUSTER_NAME=$(tofu output -raw cluster_name)" >> "$GITHUB_ENV"
+          # Chart values that point the release at the database and identities OpenTofu created
+          tofu output -raw helm_values > "$RUNNER_TEMP/values-database.yaml"
 
       - name: Build and push image
         working-directory: infra/${{ inputs.cloud }}
@@ -226,16 +232,23 @@ jobs:
             eks) aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION" ;;
           esac
 
+      # The migration Job runs first (a pre-install and pre-upgrade hook); if it fails, the
+      # upgrade stops and the running pods keep serving
       - name: Install or upgrade the release
         run: |
           helm upgrade --install "$RELEASE" "$CHART" \
             --namespace "$NAMESPACE" --create-namespace \
             --values "${CHART}/values-${CLOUD}.yaml" \
+            --values "$RUNNER_TEMP/values-database.yaml" \
             --set image.repository="$IMAGE_REPOSITORY" \
             --set image.tag="$IMAGE_TAG" \
             --set environment="$DEPLOY_ENV" \
-            --wait --timeout 10m
+            --wait --timeout 15m
           kubectl get pods,services --namespace "$NAMESPACE" --output wide
+
+      - name: Show the migration log
+        if: always()
+        run: kubectl logs "job/${RELEASE}-migrate" --namespace "$NAMESPACE" --all-containers || true
 
       - name: Verify the new pods are serving
         id: verify
@@ -246,7 +259,8 @@ jobs:
           kubectl port-forward --namespace "$NAMESPACE" "service/${service}" 18080:80 \
             > "$RUNNER_TEMP/port-forward.log" 2>&1 &
           for attempt in $(seq 1 30); do
-            if body="$(curl --fail --silent --max-time 5 http://127.0.0.1:18080/health)"; then
+            # /ready answers 200 only when the pod can query its database
+            if body="$(curl --fail --silent --max-time 5 http://127.0.0.1:18080/ready)"; then
               version="$(jq -r .version <<<"$body")"
               if [ "$version" = "$IMAGE_TAG" ]; then
                 # The cloud load balancer can take a few minutes; report its address once it has one
@@ -264,15 +278,16 @@ jobs:
                   echo "- Cluster: ${CLUSTER_NAME}"
                   echo "- URL: ${url:-load balancer still provisioning; see kubectl get service}"
                   echo "- Version: \`${version}\`"
+                  echo "- Database: $(jq -r .database <<<"$body")"
                 } >> "$GITHUB_STEP_SUMMARY"
                 exit 0
               fi
               echo "Attempt ${attempt}: still serving ${version}"
             else
-              echo "Attempt ${attempt}: not healthy yet"
+              echo "Attempt ${attempt}: not ready yet"
             fi
             sleep 5
           done
           cat "$RUNNER_TEMP/port-forward.log"
-          echo "::error::The release did not serve version ${IMAGE_TAG}"
+          echo "::error::The release did not become ready with version ${IMAGE_TAG}"
           exit 1

@@ -41,7 +41,9 @@ jobs:
     name: OpenTofu
     uses: Naresh1401/github-cicd-workflows/.github/workflows/iac.yml@v1
     with:
-      directories: '["infra/aws", "infra/azure", "infra/gcp", "infra/eks", "infra/gke", "infra/aks"]'
+      directories: >-
+        ["infra/aws", "infra/azure", "infra/gcp", "infra/eks", "infra/gke", "infra/aks",
+        "infra/modules/aws-database", "infra/modules/gcp-database", "infra/modules/azure-database"]
       scan: enforce
 
   container:
@@ -60,14 +62,23 @@ jobs:
     uses: Naresh1401/github-cicd-workflows/.github/workflows/helm.yml@v1
     with:
       chart: deploy/helm/multi-cloud-app
+      # Each cloud's values alone, then with the database values its OpenTofu outputs
       values-files: |
         values-gke.yaml
         values-aks.yaml
         values-eks.yaml
-      # Installs the chart on a kind cluster with the image built from this commit
+        values-gke.yaml ci/gke-database-values.yaml
+        values-aks.yaml ci/aks-database-values.yaml
+        values-eks.yaml ci/eks-database-values.yaml
+        values-kind.yaml
+      # Installs the chart on a kind cluster with the image built from this commit and a
+      # PostgreSQL: the migration hook must succeed and /ready must report the commit
       kind-test: true
+      setup-manifests: deploy/kind/postgres.yaml
+      install-values-files: values-kind.yaml
       image-dockerfile: Dockerfile
       version-build-arg: APP_VERSION
+      health-path: /ready
       expect-version: true
 
   release:
