@@ -95,7 +95,8 @@ aws iam attach-role-policy --role-name "$ROLE_NAME" \
 ```
 
 In a shared account, attach a policy limited to EC2 (VPC), ECR, ECS, Elastic Load
-Balancing, EKS, IAM (roles and policies named after the service or cluster), KMS,
+Balancing, EKS, RDS, Secrets Manager (RDS creates the database administrator's secret on
+the role's behalf), IAM (roles and policies named after the service or cluster), KMS,
 CloudWatch Logs and the state bucket instead.
 
 ## 4. Configure the GitHub Environments

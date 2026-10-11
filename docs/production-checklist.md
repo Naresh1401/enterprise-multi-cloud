@@ -36,11 +36,23 @@ Use this before treating a deployment as production.
       the chart is re-tested on the new version
 - [ ] Clusters that aren't in use are destroyed (`helm uninstall`, then `tofu destroy`)
 
+## Database
+
+- [ ] The database fits `replicas x workers x (DB_POOL_SIZE + DB_MAX_OVERFLOW)` connections
+      plus a few for migrations, and the HPA's `maxReplicas` keeps within that
+- [ ] `prod` runs highly available (Multi-AZ, regional or zone-redundant) with 14 days of
+      backups and deletion protection, which the `prod` environment name turns on
+- [ ] A restore from backup has been tried, and how long it takes is known
+- [ ] Migrations add before they remove, so the previous version keeps working while the new
+      one rolls out ([database.md](database.md#writing-a-migration))
+- [ ] `/api/items` sits behind authentication before it holds real data
+- [ ] Alerts exist for connections, CPU, storage and replication lag
+
 ## Delivery
 
 - [ ] CI is green for the commit being deployed
 - [ ] The deployment run summary shows the expected commit SHA and URL
-- [ ] `/health` on the live URL reports that commit
+- [ ] `/ready` on the live URL reports that commit and `"database": "ok"`
 
 ## Operations
 

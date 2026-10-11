@@ -1,0 +1,89 @@
+{{- if and .Values.database.enabled .Values.database.migrations.enabled }}
+{{- $auth := include "app.databaseAuth" (list . (.Values.database.migrations.auth | default .Values.database.auth) "database.migrations.auth") }}
+{{- $appAuth := include "app.databaseAuth" (list . .Values.database.auth "database.auth") }}
+{{- $migrations := .Values.database.migrations }}
+# Brings the schema up to date before the new pods start. If it fails, the install or upgrade
+# fails and the running pods keep serving.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "app.migrationName" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    # The finished Job stays until the next deployment, so its logs can be read
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ $migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ $migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "app.migrationSelectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+        {{- with $migrations.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "app.migrationName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ include "app.version" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "app.migrate"]
+          env:
+            - name: APP_ENV
+              value: {{ .Values.environment | quote }}
+            {{- include "app.databaseEnv" (list . $auth (required "database.migrations.user must name the administrator or migration role" $migrations.user)) | nindent 12 }}
+            {{- if $migrations.passwordSecretArn }}
+            - name: DB_PASSWORD_SECRET_ARN
+              value: {{ $migrations.passwordSecretArn | quote }}
+            {{- else if eq $auth "password" }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "database.migrations.existingSecret must name the Secret with the administrator's password" $migrations.existingSecret }}
+                  key: password
+            {{- end }}
+            - name: DB_APP_ROLE
+              value: {{ .Values.database.user | quote }}
+            - name: DB_APP_AUTH
+              value: {{ $appAuth | quote }}
+            {{- if eq $appAuth "password" }}
+            - name: DB_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "database.existingSecret must name the Secret with the service's password" .Values.database.existingSecret }}
+                  key: password
+            {{- end }}
+            {{- if eq $appAuth "azure-entra" }}
+            - name: DB_APP_PRINCIPAL_ID
+              value: {{ required "database.migrations.appPrincipalId must be the object ID of the service's managed identity" $migrations.appPrincipalId | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml $migrations.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

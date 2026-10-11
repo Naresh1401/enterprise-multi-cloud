@@ -49,6 +49,10 @@ module "vpc" {
   enable_nat_gateway = true
   single_nat_gateway = var.environment != "prod"
 
+  # Subnets for the database only, with no route to the internet
+  database_subnets             = [for i in range(3) : cidrsubnet(var.vpc_cidr, 8, 192 + i)]
+  create_database_subnet_group = false
+
   # EKS Auto Mode puts internet-facing load balancers in public subnets, internal ones in private
   public_subnet_tags  = { "kubernetes.io/role/elb" = 1 }
   private_subnet_tags = { "kubernetes.io/role/internal-elb" = 1 }

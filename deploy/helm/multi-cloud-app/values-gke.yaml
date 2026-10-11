@@ -1,3 +1,36 @@
 # GKE Autopilot: an external passthrough Network Load Balancer in front of the pods
 service:
   type: LoadBalancer
+
+# Cloud SQL through the Cloud SQL Python Connector, signed in with IAM. Each Kubernetes service
+# account acts as its own Google service account (Workload Identity Federation for GKE).
+# infra/gke outputs the instance, the service accounts and the private services range.
+database:
+  auth: gcp-iam
+  extraEnv:
+    # A new connection first fetches the instance's certificates from the Cloud SQL Admin API
+    DB_CONNECT_TIMEOUT: "10"
+  egress:
+    # The connector reaches the instance's server-side proxy on 3307, not PostgreSQL's 5432
+    ports: [3307]
+
+networkPolicy:
+  extraEgress:
+    # The GKE metadata server, which hands out Workload Identity credentials (Dataplane V2
+    # answers on 169.254.169.254:80, other clusters on 169.254.169.252:988)
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - port: 80
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.252/32
+      ports:
+        - port: 988
+          protocol: TCP
+    # The Cloud SQL Admin API, for the instance's address and certificates
+    - ports:
+        - port: 443
+          protocol: TCP

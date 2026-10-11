@@ -16,10 +16,5 @@ spec:
         - port: http
           protocol: TCP
   egress:
-    # The service calls nothing outside the pod, so only DNS lookups go out
-    - ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
+    {{- include "app.egress" (list . list) | nindent 4 }}
 {{- end }}

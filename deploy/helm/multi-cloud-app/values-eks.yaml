@@ -6,3 +6,26 @@ service:
     service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
     service.beta.kubernetes.io/aws-load-balancer-target-type: ip
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: /health
+
+# Amazon RDS. The service signs in with IAM tokens; the migration job signs in as the RDS
+# administrator with the password RDS keeps in Secrets Manager. Both get their AWS credentials
+# from EKS Pod Identity. infra/eks outputs the server, the secret and the subnets.
+database:
+  auth: aws-iam
+  migrations:
+    auth: password
+    extraEgress:
+      # Secrets Manager, for the administrator's password
+      - ports:
+          - port: 443
+            protocol: TCP
+
+networkPolicy:
+  extraEgress:
+    # The EKS Pod Identity Agent on each node, which hands out the pods' AWS credentials
+    - to:
+        - ipBlock:
+            cidr: 169.254.170.23/32
+      ports:
+        - port: 80
+          protocol: TCP

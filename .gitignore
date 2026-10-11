@@ -13,3 +13,5 @@ htmlcov/
 .ruff_cache/
 *.tfplan
 crash.log
+# Modules take their provider versions from the configurations that use them
+infra/modules/**/.terraform.lock.hcl

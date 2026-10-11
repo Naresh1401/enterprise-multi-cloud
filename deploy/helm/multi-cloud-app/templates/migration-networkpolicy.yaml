@@ -1,0 +1,22 @@
+{{- if and .Values.networkPolicy.enabled .Values.database.enabled .Values.database.migrations.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "app.migrationName" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "app.migrationSelectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  # Nothing connects to the job
+  ingress: []
+  egress:
+    {{- include "app.egress" (list . .Values.database.migrations.extraEgress) | nindent 4 }}
+{{- end }}

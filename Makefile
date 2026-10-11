@@ -53,8 +53,12 @@ docker-build:
 docker-run: docker-build
 	docker run --rm --publish 8000:8000 $(IMAGE):$(VERSION)
 
-INFRA := aws azure gcp eks gke aks
+INFRA := aws azure gcp eks gke aks modules/aws-database modules/gcp-database modules/azure-database
 CHART := deploy/helm/multi-cloud-app
+# values.yaml alone, each cloud's values, then each cloud's with the database values its OpenTofu outputs
+CHART_VALUES := "" values-gke.yaml values-aks.yaml values-eks.yaml \
+	"values-gke.yaml ci/gke-database-values.yaml" "values-aks.yaml ci/aks-database-values.yaml" \
+	"values-eks.yaml ci/eks-database-values.yaml" values-kind.yaml
 
 tofu-check:
 	@for dir in $(INFRA); do \
@@ -63,8 +67,8 @@ tofu-check:
 	done
 
 helm-check:
-	@for values in "" values-gke.yaml values-aks.yaml values-eks.yaml; do \
-		args=""; if [ -n "$$values" ]; then args="--values $(CHART)/$$values"; fi; \
+	@for values in $(CHART_VALUES); do \
+		args=""; for file in $$values; do args="$$args --values $(CHART)/$$file"; done; \
 		echo "== values.yaml $$values"; \
 		helm lint --strict $(CHART) $$args && helm template ci $(CHART) $$args >/dev/null || exit 1; \
 	done

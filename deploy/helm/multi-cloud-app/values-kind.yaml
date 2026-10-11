@@ -1,0 +1,12 @@
+# A kind cluster with the PostgreSQL from deploy/kind/postgres.yaml, as in CI: the migration hook
+# signs in as the administrator and creates app_user, then the service signs in as app_user.
+database:
+  enabled: true
+  auth: password
+  host: postgres
+  # The throwaway server has no certificate; every cloud connection uses TLS
+  sslMode: disable
+  existingSecret: app-db
+  migrations:
+    user: postgres
+    existingSecret: postgres-admin

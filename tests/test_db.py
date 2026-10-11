@@ -113,6 +113,10 @@ def test_root_certificates():
         password_secret_arn="arn:aws:secretsmanager:us-east-1:111122223333:secret:rds!db-1",
     )
     assert secret.root_certificate == str(db.RDS_CA_BUNDLE)
+    admin = Settings(
+        auth="password", user="dbadmin", host="db.abc123.eu-west-1.rds.amazonaws.com", password="p"
+    )
+    assert admin.root_certificate == str(db.RDS_CA_BUNDLE)
     azure = Settings(auth="azure-entra", user="u", host="h")
     assert azure.root_certificate.endswith("cacert.pem")
     custom = Settings(auth="azure-entra", user="u", host="h", sslrootcert="/etc/ca.pem")

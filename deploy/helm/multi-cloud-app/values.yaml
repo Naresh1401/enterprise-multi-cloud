@@ -38,6 +38,9 @@ serviceAccount:
 
 podAnnotations: {}
 
+# Extra labels on the service's pods, for example azure.workload.identity/use on AKS
+podLabels: {}
+
 resources:
   requests:
     cpu: 250m
@@ -55,9 +58,66 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
-# Lets traffic in on the HTTP port only, and nothing out except DNS
+# Lets traffic in on the HTTP port only, and out only to DNS, the database and extraEgress
 networkPolicy:
   enabled: true
+  # More egress rules for the service and its migration job, for example to the cloud's
+  # identity endpoint; values-<cloud>.yaml sets them
+  extraEgress: []
+
+# PostgreSQL; see docs/database.md. Off by default, and the service then runs without a database.
+# The deploy workflow turns it on with the values that OpenTofu outputs for the cluster's database.
+database:
+  enabled: false
+  # aws-iam, gcp-iam or azure-entra; password for local clusters and CI
+  auth: ""
+  host: ""
+  port: 5432
+  # gcp-iam: the Cloud SQL instance connection name, project:region:instance
+  instance: ""
+  name: app
+  # The role the service signs in as
+  user: app_user
+  sslMode: verify-full
+  # aws-iam: the database's region
+  region: ""
+  # password: a Secret with the service's password under the key "password"
+  existingSecret: ""
+  # More DB_* settings from docs/database.md, for example DB_POOL_SIZE: "4"
+  extraEnv: {}
+  # Where the pods may open database connections; an empty list allows any address
+  egress:
+    to: []
+    ports: [5432]
+
+  # A Job that runs `python -m app.migrate` before every install and upgrade, with its own
+  # service account, so only it holds the identity that can change the schema
+  migrations:
+    enabled: true
+    # How the job signs in; empty uses database.auth
+    auth: ""
+    # The administrator or migration role
+    user: ""
+    # password: a Secret with the administrator's password under the key "password"
+    existingSecret: ""
+    # AWS: the Secrets Manager secret in which RDS keeps the administrator's password
+    passwordSecretArn: ""
+    # azure-entra: the object ID of the service's managed identity
+    appPrincipalId: ""
+    serviceAccount:
+      # For workload identity, as for serviceAccount.annotations
+      annotations: {}
+    podLabels: {}
+    # More egress rules for the job only, for example to Secrets Manager on AWS
+    extraEgress: []
+    backoffLimit: 1
+    activeDeadlineSeconds: 600
+    resources:
+      requests:
+        cpu: 100m
+        memory: 192Mi
+      limits:
+        memory: 384Mi
 
 podSecurityContext:
   runAsNonRoot: true

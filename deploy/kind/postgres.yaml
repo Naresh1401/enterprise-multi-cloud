@@ -1,0 +1,102 @@
+# A throwaway PostgreSQL for a kind cluster, which the chart's CI install (values-kind.yaml)
+# connects to. Its data lives in an emptyDir and its passwords are fixed: never use it elsewhere.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-admin
+type: Opaque
+stringData:
+  password: local-only-password
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-db
+type: Opaque
+stringData:
+  password: app-local-password
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # The postgres user of the Alpine image
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+          env:
+            - name: POSTGRES_DB
+              value: app
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-admin
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              # Over TCP: during first start-up the server only listens on its socket
+              command: ["pg_isready", "--host=127.0.0.1", "--username=postgres", "--dbname=app"]
+            periodSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: socket
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: socket
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

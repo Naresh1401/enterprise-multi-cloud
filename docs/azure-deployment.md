@@ -84,8 +84,10 @@ done
   resource group. To scope it more tightly, create the resource group first,
   import it into state, and grant Contributor on that group instead.
 - **Role Based Access Control Administrator**, constrained so it can only
-  assign or remove `AcrPull` (`7f951dda-4ed3-4680-a7ca-43fe172d538d`). OpenTofu
-  uses it to let the app's identity pull from the registry.
+  assign or remove `AcrPull` (`7f951dda-4ed3-4680-a7ca-43fe172d538d`) and Network
+  Contributor (`4d97b98b-1d4f-4787-a291-c67834d212e7`). OpenTofu uses it to let the
+  app's identities pull from the registry and, on AKS, to let the cluster join its
+  nodes to their subnet.
 - **Storage Blob Data Contributor** on the state container.
 
 ```bash
@@ -97,7 +99,7 @@ az role assignment create --assignee "$APP_ID" \
   --role "Role Based Access Control Administrator" \
   --scope "$SCOPE" \
   --condition-version "2.0" \
-  --condition "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {7f951dda-4ed3-4680-a7ca-43fe172d538d})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {7f951dda-4ed3-4680-a7ca-43fe172d538d}))"
+  --condition "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {7f951dda-4ed3-4680-a7ca-43fe172d538d, 4d97b98b-1d4f-4787-a291-c67834d212e7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {7f951dda-4ed3-4680-a7ca-43fe172d538d, 4d97b98b-1d4f-4787-a291-c67834d212e7}))"
 
 STATE_ID="$(az storage account show --name "$STATE_ACCOUNT" --resource-group "$STATE_RG" --query id -o tsv)"
 az role assignment create --assignee "$APP_ID" \
