@@ -138,10 +138,11 @@ class Settings:
     @property
     def root_certificate(self) -> str:
         """The CA certificates that verify the server: DB_SSLROOTCERT if set, Amazon RDS's
-        on AWS, and otherwise the public roots, which Azure's servers chain to."""
+        for an RDS server, and otherwise the public roots, which Azure's servers chain to."""
         if self.sslrootcert:
             return self.sslrootcert
-        if self.auth == "aws-iam" or self.password_secret_arn:
+        on_rds = ".rds.amazonaws.com" in self.host
+        if self.auth == "aws-iam" or self.password_secret_arn or on_rds:
             return str(RDS_CA_BUNDLE)
         return certifi.where()
 
