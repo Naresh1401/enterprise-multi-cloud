@@ -18,7 +18,8 @@ spec:
   containers:
     - name: health
       image: {{ .Values.testImage }}
-      command: ["wget", "-qO-", "http://{{ include "app.fullname" . }}:{{ .Values.service.port }}/health"]
+      # /ready also answers only when the service can query its database
+      command: ["wget", "-qO-", "http://{{ include "app.fullname" . }}:{{ .Values.service.port }}/ready"]
       securityContext:
         allowPrivilegeEscalation: false
         readOnlyRootFilesystem: true

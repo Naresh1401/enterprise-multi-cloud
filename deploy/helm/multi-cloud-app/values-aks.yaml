@@ -3,3 +3,23 @@ service:
   type: LoadBalancer
   annotations:
     service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path: /health
+
+# Azure Database for PostgreSQL, signed in with Microsoft Entra tokens. Each Kubernetes service
+# account is federated with its own managed identity (Microsoft Entra Workload ID); the label
+# lets the workload identity webhook give the pods their tokens. infra/aks outputs the server,
+# the identities and the database subnet.
+podLabels:
+  azure.workload.identity/use: "true"
+
+database:
+  auth: azure-entra
+  migrations:
+    podLabels:
+      azure.workload.identity/use: "true"
+
+networkPolicy:
+  extraEgress:
+    # Microsoft Entra ID, which exchanges the pod's Kubernetes token for a database token
+    - ports:
+        - port: 443
+          protocol: TCP

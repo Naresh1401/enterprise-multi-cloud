@@ -1,0 +1,20 @@
+# What infra/eks outputs as helm_values, with example values; CI renders it on top of
+# values-eks.yaml to check the chart as EKS runs it
+database:
+  enabled: true
+  host: multi-cloud-dev.c1a2b3c4d5e6.us-east-1.rds.amazonaws.com
+  port: 5432
+  name: app
+  user: app_user
+  region: us-east-1
+  migrations:
+    user: dbadmin
+    passwordSecretArn: "arn:aws:secretsmanager:us-east-1:111122223333:secret:rds!db-0a1b2c3d-AbCdEf"
+  egress:
+    to:
+      - ipBlock:
+          cidr: 10.30.192.0/24
+      - ipBlock:
+          cidr: 10.30.193.0/24
+      - ipBlock:
+          cidr: 10.30.194.0/24

@@ -1,0 +1,19 @@
+# What infra/gke outputs as helm_values, with example values; CI renders it on top of
+# values-gke.yaml to check the chart as GKE runs it
+serviceAccount:
+  annotations:
+    iam.gke.io/gcp-service-account: multi-cloud-dev-app@example-project.iam.gserviceaccount.com
+database:
+  enabled: true
+  instance: example-project:us-central1:multi-cloud-dev
+  name: app
+  user: multi-cloud-dev-app@example-project.iam
+  migrations:
+    user: multi-cloud-dev-migrate@example-project.iam
+    serviceAccount:
+      annotations:
+        iam.gke.io/gcp-service-account: multi-cloud-dev-migrate@example-project.iam.gserviceaccount.com
+  egress:
+    to:
+      - ipBlock:
+          cidr: 10.100.0.0/20
