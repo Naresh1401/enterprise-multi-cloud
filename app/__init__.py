@@ -1,1 +1,1 @@
-"""Application package for the multi-cloud CI/CD blueprint."""
+"""Application package for the enterprise multi-cloud service."""

@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The gates come from the shared workflows in Naresh1401/github-cicd-workflows.
+# This file only sets how strict each one is for this service.
+jobs:
+  python:
+    name: Lint, test and audit
+    uses: Naresh1401/github-cicd-workflows/.github/workflows/python-ci.yml@v1
+    with:
+      lint: full
+      test-command: python -m pytest --cov --cov-report=term-missing
+      audit: enforce
+
+  repo-lint:
+    name: Lint workflows, scripts and Dockerfile
+    uses: Naresh1401/github-cicd-workflows/.github/workflows/repo-lint.yml@v1
+    with:
+      workflow-shellcheck: true
+      shellcheck-severity: style
+      hadolint-threshold: info
+
+  infrastructure:
+    name: OpenTofu
+    uses: Naresh1401/github-cicd-workflows/.github/workflows/iac.yml@v1
+    with:
+      directories: '["infra/azure", "infra/gcp"]'
+      scan: enforce
+
+  container:
+    name: Image
+    needs: python
+    uses: Naresh1401/github-cicd-workflows/.github/workflows/container.yml@v1
+    with:
+      version-build-arg: APP_VERSION
+      smoke-test: true
+      expect-version: true
+      require-non-root: true
+      scan: enforce
+
+  release:
+    name: Record release metadata
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [python, repo-lint, infrastructure, container]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Write release metadata
+        env:
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          mkdir -p release-metadata
+          jq --null-input \
+            --arg repository "$REPOSITORY" --arg sha "$SHA" --arg ref "$REF" --arg run_id "$RUN_ID" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{repository: $repository, sha: $sha, ref: $ref, workflow_run_id: $run_id, status: "validated", timestamp: $timestamp}' \
+            > release-metadata/release.json
+          cat release-metadata/release.json
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-metadata-${{ github.sha }}
+          path: release-metadata/release.json
+          retention-days: 90

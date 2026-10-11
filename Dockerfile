@@ -3,8 +3,8 @@ FROM python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e57
 # The commit SHA the image was built from; reported by /health
 ARG APP_VERSION=dev
 
-LABEL org.opencontainers.image.title="enterprise-multi-cloud-cicd" \
-      org.opencontainers.image.source="https://github.com/Naresh1401/enterprise-multi-cloud-cicd" \
+LABEL org.opencontainers.image.title="enterprise-multi-cloud" \
+      org.opencontainers.image.source="https://github.com/Naresh1401/enterprise-multi-cloud" \
       org.opencontainers.image.revision="${APP_VERSION}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

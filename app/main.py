@@ -4,7 +4,7 @@ import os
 
 from flask import Flask, jsonify
 
-SERVICE_NAME = "enterprise-multi-cloud-cicd"
+SERVICE_NAME = "enterprise-multi-cloud"
 
 app = Flask(__name__)
 

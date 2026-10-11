@@ -1,14 +1,15 @@
-# Enterprise Multi-Cloud CI/CD
+# Enterprise Multi-Cloud
 
-[![CI/CD](https://github.com/Naresh1401/enterprise-multi-cloud-cicd/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/Naresh1401/enterprise-multi-cloud-cicd/actions/workflows/ci-cd.yml)
+[![CI](https://github.com/Naresh1401/enterprise-multi-cloud/actions/workflows/ci.yml/badge.svg)](https://github.com/Naresh1401/enterprise-multi-cloud/actions/workflows/ci.yml)
 
-A Flask service and the delivery pipeline that ships it to **Google Cloud Run**
-or **Azure Container Apps**. Every change passes the same quality and security
-gates. Every deployment is a manually dispatched, OIDC-authenticated OpenTofu
+A Flask service and the deployment pipelines that ship it to **Google Cloud Run**
+or **Azure Container Apps**. Every change passes the quality and security gates
+from [github-cicd-workflows](https://github.com/Naresh1401/github-cicd-workflows),
+the shared CI that all of my repositories use. Every deployment is a manually dispatched, OIDC-authenticated OpenTofu
 run that finishes only when the new commit is the one serving traffic.
 
 ```text
-Push or pull request
+Push or pull request (shared workflows from github-cicd-workflows)
   -> ruff, pytest (coverage gate), pip-audit
   -> actionlint, shellcheck, hadolint
   -> OpenTofu fmt and validate (Azure, GCP)
@@ -44,7 +45,7 @@ with `HOST_PORT=8080 make pipeline`.
 
 ```console
 $ curl -s localhost:8000/health
-{"service":"enterprise-multi-cloud-cicd","status":"healthy","version":"dev"}
+{"service":"enterprise-multi-cloud","status":"healthy","version":"dev"}
 ```
 
 `/health` reports the commit the image was built from (`APP_VERSION`), which is
@@ -101,7 +102,7 @@ gunicorn.conf.py        Production server settings (honours PORT)
 Dockerfile              Pinned base image, non-root user, healthcheck
 infra/gcp/              Artifact Registry and Cloud Run (OpenTofu)
 infra/azure/            ACR, Container Apps and the pull identity (OpenTofu)
-.github/workflows/      ci-cd.yml, deploy-gcp.yml, deploy-azure.yml
+.github/workflows/      ci.yml (shared gates), deploy-gcp.yml, deploy-azure.yml
 .github/dependabot.yml  Weekly updates for Actions, pip and the base image
 docs/                   Architecture, deployment runbooks, production checklist
 scripts/                Local pipeline and bootstrap checklists
@@ -119,7 +120,9 @@ scripts/                Local pipeline and bootstrap checklists
 
 ## Background
 
-This repository consolidates the application, pipeline and infrastructure that
-previously lived in `multi-cloud-cicd-blueprint` and `ai-cicd-private`. The
-pipeline builds this repository's own code instead of cloning a second
-repository at runtime.
+This repository was `enterprise-multi-cloud-cicd` until its CI gates moved into
+[github-cicd-workflows](https://github.com/Naresh1401/github-cicd-workflows), so
+every repository can share them. What stays here is the multi-cloud part: the
+service, its OpenTofu infrastructure and the deployment pipelines. It started as
+a consolidation of `multi-cloud-cicd-blueprint` and `ai-cicd-private`, and builds
+its own code instead of cloning a second repository at runtime.
