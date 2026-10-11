@@ -1,3 +1,9 @@
+variable "environment" {
+  type        = string
+  default     = "dev"
+  description = "Deployment environment name, used for APP_ENV and resource tags"
+}
+
 variable "resource_group_name" {
   type        = string
   default     = "rg-multi-cloud-demo"
@@ -13,6 +19,11 @@ variable "location" {
 variable "acr_name" {
   type        = string
   description = "Globally unique Azure Container Registry name"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]{5,50}$", var.acr_name))
+    error_message = "acr_name must be 5-50 lowercase letters or digits."
+  }
 }
 
 variable "log_analytics_workspace_name" {
@@ -31,6 +42,11 @@ variable "container_app_name" {
   type        = string
   default     = "multi-cloud-app"
   description = "Azure Container App name"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{0,30}[a-z0-9]$", var.container_app_name))
+    error_message = "container_app_name must be 2-32 lowercase letters, digits or hyphens, starting with a letter."
+  }
 }
 
 variable "image_name" {
@@ -42,5 +58,28 @@ variable "image_name" {
 variable "image_tag" {
   type        = string
   default     = "latest"
-  description = "Tag used for the deployed application image"
+  description = "Image tag to deploy; the deployment workflow passes the commit SHA"
+
+  validation {
+    condition     = length(trimspace(var.image_tag)) > 0
+    error_message = "image_tag must not be empty."
+  }
+}
+
+variable "min_replicas" {
+  type        = number
+  default     = 1
+  description = "Minimum number of running replicas"
+}
+
+variable "max_replicas" {
+  type        = number
+  default     = 2
+  description = "Maximum number of running replicas"
+}
+
+variable "tags" {
+  type        = map(string)
+  default     = {}
+  description = "Extra tags applied to every resource"
 }
