@@ -1,0 +1,9 @@
+# Read by Trivy (and the shared misconfiguration scan) from the repository root
+scan:
+  # Provider and module downloads from a local `tofu init`
+  skip-dirs:
+    - "**/.terraform"
+misconfiguration:
+  terraform:
+    # Findings inside downloaded community modules (VPC, EKS) aren't fixable here
+    exclude-downloaded-modules: true
