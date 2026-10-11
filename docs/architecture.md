@@ -1,9 +1,9 @@
 # Architecture
 
-One Flask service, one container image definition, and six deployment targets across
-three clouds: a serverless container platform on each (ECS Fargate, Cloud Run, Azure
-Container Apps) and Kubernetes on each (EKS Auto Mode, GKE Autopilot, AKS) through a
-single Helm chart. The quality and security gates come from the shared workflows in
+One Flask service backed by PostgreSQL, one container image definition, and six deployment
+targets across three clouds: a serverless container platform on each (ECS Fargate, Cloud
+Run, Azure Container Apps) and Kubernetes on each (EKS Auto Mode, GKE Autopilot, AKS) through
+a single Helm chart. The quality and security gates come from the shared workflows in
 [github-cicd-workflows](https://github.com/Naresh1401/github-cicd-workflows); this
 repository's own workflows run the deployments, and OpenTofu owns every cloud resource
 the service runs on.
@@ -33,9 +33,9 @@ flowchart LR
   end
 
   subgraph k8s[Deploy to Kubernetes]
-    k1[OIDC sign-in] --> k2[OpenTofu: cluster and registry]
-    k2 --> k3[Build and push image] --> k4[helm upgrade with the cloud's values]
-    k4 --> k5[Verify /health reports the commit]
+    k1[OIDC sign-in] --> k2[OpenTofu: cluster, registry and database]
+    k2 --> k3[Build and push image] --> k4[helm upgrade: migration Job, then the pods]
+    k4 --> k5[Verify /ready reports the commit and the database]
   end
 
   serverless --> verify[Verify /health reports the commit]
@@ -45,18 +45,20 @@ flowchart LR
 
 | Piece | Role |
 | --- | --- |
-| `app/` | Flask service with `/` and `/health`. `/health` reports the commit it was built from (`APP_VERSION`). |
+| `app/` | Flask service with `/`, `/health`, `/ready` and `/api/items`. `/health` reports the commit it was built from (`APP_VERSION`); `/ready` also checks the database. `app/db.py` connects to PostgreSQL with each cloud's sign-in, and `python -m app.migrate` applies the migrations in `app/migrations` ([database.md](database.md)). |
 | `Dockerfile` | Pinned `python:3.11-slim` base, gunicorn, non-root user (UID 10001), healthcheck. |
-| `deploy/helm/multi-cloud-app/` | Helm chart for any cluster, with `values-gke.yaml`, `values-aks.yaml` and `values-eks.yaml` for each cloud's load balancer. |
+| `deploy/helm/multi-cloud-app/` | Helm chart for any cluster, with `values-gke.yaml`, `values-aks.yaml` and `values-eks.yaml` for each cloud's load balancer and database sign-in, and a migration Job that runs as a hook before every upgrade. |
+| `deploy/kind/` | A throwaway PostgreSQL that CI (and `values-kind.yaml`) installs the chart against on kind. |
 | `.github/workflows/ci.yml` | Calls the shared quality and security gates on every push and pull request, including a kind install of the chart, and sets how strict each one is. |
 | `.github/workflows/deploy-aws.yml`, `deploy-gcp.yml`, `deploy-azure.yml` | Manually dispatched serverless deployments, one per cloud, protected by GitHub Environments. |
 | `.github/workflows/deploy-kubernetes.yml` | Manually dispatched Kubernetes deployment to GKE, AKS or EKS. |
 | `infra/aws/` | VPC with NAT, ECR, ECS cluster, Fargate service in private subnets, Application Load Balancer (HTTPS when a certificate is set). |
 | `infra/gcp/` | Artifact Registry, Cloud Run service, public invoker binding. |
 | `infra/azure/` | Resource group, Log Analytics, Container Registry, Container Apps environment, user-assigned pull identity with `AcrPull`, Container App. |
-| `infra/eks/` | VPC across three zones, EKS Auto Mode cluster, ECR. |
-| `infra/gke/` | VPC with pod and service ranges, Cloud NAT, GKE Autopilot cluster with private nodes, Artifact Registry. |
-| `infra/aks/` | Resource group, Container Registry, AKS cluster with Cilium networking and workload identity, `AcrPull` for the nodes. |
+| `infra/eks/` | VPC across three zones with database subnets, EKS Auto Mode cluster, ECR, RDS, and Pod Identity roles for the service and the migration Job. |
+| `infra/gke/` | VPC with pod and service ranges, Cloud NAT, GKE Autopilot cluster with private nodes, Artifact Registry, Cloud SQL, and Workload Identity bindings for the service and the migration Job. |
+| `infra/aks/` | Resource group, virtual network, Container Registry, AKS cluster with Cilium networking and workload identity, a PostgreSQL flexible server, and federated managed identities for the service and the migration Job. |
+| `infra/modules/` | The PostgreSQL setup for each cloud (`aws-database`, `gcp-database`, `azure-database`), shared by its targets. |
 
 ## Design decisions
 
@@ -66,6 +68,15 @@ environments, Azure through federated credentials scoped to each GitHub Environm
 (`repo:<owner>/<repo>:environment:<env>`), and GCP through a Workload Identity
 Federation provider limited to this repository. No cloud key or client secret is
 stored in GitHub.
+
+**Databases without passwords.** The service signs in to PostgreSQL with its platform's
+identity: RDS IAM tokens, Cloud SQL IAM through the Cloud SQL connector, or Microsoft Entra
+tokens. Each token lives an hour or less and is fetched per connection. Migrations run as a
+separate Job with a separate identity, the only one that can change the schema; the
+service's role can read and write rows and nothing more. On Google Cloud and Azure no
+database password exists at all; on AWS the administrator's password is generated, stored
+and rotated by RDS in Secrets Manager, and only the migration Job may read it. Every
+database is reachable only from its own network, over TLS that verifies the server.
 
 **One image, six platforms.** Every target runs the same Dockerfile, tagged with the
 commit SHA and built with that SHA baked in as `APP_VERSION`. Each deployment ends by
@@ -111,7 +122,12 @@ Kubernetes API endpoint for GitHub-hosted runners) are marked in the code with t
   address; self-hosted runners inside each network would allow private endpoints.
 - The ECS load balancer serves plain HTTP until `AWS_CERTIFICATE_ARN` is set, and the
   Kubernetes load balancers serve plain HTTP until an Ingress with TLS is added.
-- kind proves the chart, not each cloud's load balancer or identity integration; those
-  are verified by the deployment's own `/health` check.
+- kind proves the chart, the migration hook and the database flow, not each cloud's load
+  balancer or identity integration; those are verified by the deployment's own `/ready` check.
+- Each deployment target has its own database. Targets that should share data would share
+  one database per cloud, with network peering between them.
+- On GKE and AKS the pods may open HTTPS connections to any address, because the identity
+  and Cloud SQL Admin endpoints have no fixed ranges; an egress gateway or FQDN policies
+  would narrow that.
 - Canary or blue/green rollouts would use Cloud Run traffic splitting, Container Apps
   multiple-revision mode, ECS blue/green deployments, or Argo Rollouts on Kubernetes.
