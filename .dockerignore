@@ -1,4 +1,5 @@
-# Only requirements.txt, gunicorn.conf.py and app/ go into the image
+# Only requirements.txt, gunicorn.conf.py and app/ (with its migrations and certificates) go
+# into the image
 .git
 .github
 .venv
@@ -19,5 +20,6 @@ tests
 *.md
 Makefile
 docker-compose.yml
+alembic.ini
 pyproject.toml
 requirements-dev.txt

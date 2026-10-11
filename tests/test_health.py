@@ -1,17 +1,9 @@
 import runpy
 from pathlib import Path
 
-import pytest
-
-from app.main import SERVICE_NAME, app
+from app.main import SERVICE_NAME
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture
-def client():
-    app.config.update(TESTING=True)
-    return app.test_client()
 
 
 def test_health_endpoint(client, monkeypatch):

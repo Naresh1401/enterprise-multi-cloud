@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/Naresh1401/enterprise-multi-cloud/actions/workflows/ci.yml/badge.svg)](https://github.com/Naresh1401/enterprise-multi-cloud/actions/workflows/ci.yml)
 
-One Flask service and the pipelines that ship it to **AWS, Google Cloud and Azure**, on each
-cloud's serverless container platform or on Kubernetes. Every change passes the quality and
+One Flask service, backed by PostgreSQL, and the pipelines that ship it to **AWS, Google Cloud
+and Azure**, on each cloud's serverless container platform or on Kubernetes. Every change passes the quality and
 security gates from [github-cicd-workflows](https://github.com/Naresh1401/github-cicd-workflows),
 the shared CI that all of my repositories use. Every deployment is a manually dispatched,
 OIDC-authenticated OpenTofu run that finishes only when the new commit is the one serving traffic.
@@ -40,8 +40,9 @@ The design and its trade-offs are in [docs/architecture.md](docs/architecture.md
 Requirements: Python 3.11+, Docker, OpenTofu (for `tofu-check`), Helm (for `helm-check`) and GNU make.
 
 ```bash
-make check        # lint, tests with coverage, dependency audit
-make run          # dev server on http://localhost:8000
+make up           # the service with PostgreSQL and its migrations on http://localhost:8000
+make check        # lint, tests with coverage against PostgreSQL, dependency audit
+make run          # dev server without a database on http://localhost:8000
 make docker-run   # the production image (gunicorn, non-root)
 make tofu-check   # OpenTofu fmt and validate for every cloud
 make helm-check   # lint and render the chart with each cloud's values
@@ -58,8 +59,11 @@ $ curl -s localhost:8000/health
 ```
 
 `/health` reports the commit the image was built from (`APP_VERSION`), which is
-how the pipeline confirms a deployment. To try the Kubernetes chart on a local
-kind cluster, see [docs/kubernetes-deployment.md](docs/kubernetes-deployment.md#try-it-locally).
+how the pipeline confirms a deployment. `/ready` also checks the database, and
+`/api/items` reads and writes it. How the service connects, signs in without
+passwords on each cloud, and migrates its schema is in [docs/database.md](docs/database.md).
+To try the Kubernetes chart on a local kind cluster, see
+[docs/kubernetes-deployment.md](docs/kubernetes-deployment.md#try-it-locally).
 
 ## Deploy
 
@@ -121,8 +125,10 @@ kind cluster, see [docs/kubernetes-deployment.md](docs/kubernetes-deployment.md#
 ## Repository layout
 
 ```text
-app/                         Flask service
-tests/                       pytest suite (100% line and branch coverage of app/)
+app/                         Flask service, its PostgreSQL connections and the migration job
+app/migrations/              Alembic migrations
+tests/                       pytest suite against PostgreSQL (100% line and branch coverage of app/)
+docker-compose.yml           The service, PostgreSQL and the migration job, for local work and CI
 gunicorn.conf.py             Production server settings (honours PORT)
 Dockerfile                   Pinned base image, non-root user, healthcheck
 deploy/helm/multi-cloud-app/ Helm chart, with values for GKE, AKS and EKS

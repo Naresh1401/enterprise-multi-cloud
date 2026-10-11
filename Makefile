@@ -4,7 +4,10 @@ BIN     := $(VENV)/bin
 IMAGE   ?= multi-cloud-app
 VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 
-.PHONY: install lint format test audit check run docker-build docker-run tofu-check helm-check pipeline
+# docker compose's PostgreSQL; the tests create and drop their own database on it
+TEST_DATABASE_ADMIN_URL ?= postgresql://postgres:local-only-password@127.0.0.1:5432/postgres
+
+.PHONY: install lint format db-up db-down test audit check run up docker-build docker-run tofu-check helm-check pipeline
 
 $(BIN)/activate: requirements.txt requirements-dev.txt
 	@$(PYTHON) -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else "Python 3.11+ is required: make PYTHON=python3.11 ...")'
@@ -23,8 +26,14 @@ format: install
 	$(BIN)/ruff format .
 	$(BIN)/ruff check --fix .
 
-test: install
-	$(BIN)/pytest --cov
+db-up:
+	docker compose up --detach --wait db
+
+db-down:
+	docker compose down --volumes
+
+test: install db-up
+	TEST_DATABASE_ADMIN_URL=$(TEST_DATABASE_ADMIN_URL) $(BIN)/pytest --cov
 
 audit: install
 	$(BIN)/pip-audit -r requirements.txt
@@ -33,6 +42,10 @@ check: lint test audit
 
 run: install
 	APP_VERSION=$(VERSION) $(BIN)/python app/main.py
+
+# The service with PostgreSQL and the migration job, as docker-compose.yml describes
+up:
+	docker compose up --build
 
 docker-build:
 	docker build --build-arg APP_VERSION=$(VERSION) --tag $(IMAGE):$(VERSION) .

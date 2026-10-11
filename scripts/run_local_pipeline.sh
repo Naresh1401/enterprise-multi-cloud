@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runs the CI gates locally: lint, tests, dependency audit, image build and a
-# container smoke test that checks the image reports the current commit.
+# Runs the CI gates locally: lint, tests (with docker compose's PostgreSQL), dependency
+# audit, image build and a container smoke test that checks the image reports the commit.
 # Set PYTHON to a 3.11+ interpreter, and HOST_PORT if port 8000 is taken.
 set -euo pipefail
 
@@ -32,8 +32,10 @@ echo "[2/6] Linting"
 .venv/bin/ruff check .
 .venv/bin/ruff format --check .
 
-echo "[3/6] Running tests"
-.venv/bin/pytest --cov
+echo "[3/6] Running tests against PostgreSQL"
+docker compose up --detach --wait db
+TEST_DATABASE_ADMIN_URL="${TEST_DATABASE_ADMIN_URL:-postgresql://postgres:local-only-password@127.0.0.1:5432/postgres}" \
+  .venv/bin/pytest --cov
 
 echo "[4/6] Auditing dependencies"
 .venv/bin/pip-audit -r requirements.txt

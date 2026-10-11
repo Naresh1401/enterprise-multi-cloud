@@ -22,6 +22,10 @@ jobs:
     uses: Naresh1401/github-cicd-workflows/.github/workflows/python-ci.yml@v1
     with:
       lint: full
+      # The database tests run against the PostgreSQL from docker-compose.yml
+      setup-command: docker compose up --detach --wait db
+      env-vars: |
+        TEST_DATABASE_ADMIN_URL=postgresql://postgres:local-only-password@127.0.0.1:5432/postgres
       test-command: python -m pytest --cov --cov-report=term-missing
       audit: enforce
 
