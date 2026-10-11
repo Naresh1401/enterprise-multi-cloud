@@ -1,145 +1,168 @@
 # Azure deployment guide
 
-This guide explains how to turn the repo into a real Azure deployment using GitHub Actions, Azure Container Registry, and Azure Container Apps.
+This guide sets up everything the **Deploy to Azure** workflow needs. You
+create only two things by hand: the storage that holds OpenTofu state, and the
+identity GitHub Actions signs in as. OpenTofu creates everything else (resource
+group, Log Analytics, Container Registry, Container Apps environment, the pull
+identity and the Container App). Do not create those resources yourself, or the
+first apply will fail because they already exist.
 
 ## Prerequisites
 
-Before running the Azure workflow, you need:
+- An Azure subscription where you can create resources and role assignments
+- Azure CLI 2.60 or later, signed in with `az login`
+- GitHub CLI, signed in with `gh auth login`
 
-- an Azure subscription
-- permission to create resource groups and resources
-- Azure CLI installed locally
-- Docker available locally for validation
-- a GitHub repository with access to Actions secrets
-
-## 1. Log in to Azure locally
+Set these once in your shell. The storage account name must be globally unique:
+3-24 lowercase letters or digits.
 
 ```bash
-az login
-az account set --subscription "<SUBSCRIPTION_ID>"
-az account show
+SUBSCRIPTION_ID="<subscription-id>"
+LOCATION="eastus"
+REPO="Naresh1401/enterprise-multi-cloud-cicd"
+STATE_RG="rg-multi-cloud-tfstate"
+STATE_ACCOUNT="<uniquestatename>"
+STATE_CONTAINER="tfstate"
+
+az account set --subscription "$SUBSCRIPTION_ID"
 ```
 
-## 2. Create the Azure resource group and registry
+## 1. Create the state storage
+
+Versioning and soft delete let you recover a damaged state file. Shared keys are
+disabled because OpenTofu signs in with Entra ID (`use_azuread_auth`).
 
 ```bash
-az group create --name rg-multi-cloud-demo --location eastus
-az acr create \
-  --resource-group rg-multi-cloud-demo \
-  --name multicloudacr123 \
-  --sku Basic
+az group create --name "$STATE_RG" --location "$LOCATION"
+
+az storage account create \
+  --name "$STATE_ACCOUNT" \
+  --resource-group "$STATE_RG" \
+  --location "$LOCATION" \
+  --sku Standard_LRS \
+  --kind StorageV2 \
+  --min-tls-version TLS1_2 \
+  --allow-blob-public-access false \
+  --allow-shared-key-access false
+
+az storage account blob-service-properties update \
+  --account-name "$STATE_ACCOUNT" \
+  --resource-group "$STATE_RG" \
+  --enable-versioning true \
+  --enable-delete-retention true \
+  --delete-retention-days 14
+
+az storage container-rm create \
+  --storage-account "$STATE_ACCOUNT" \
+  --resource-group "$STATE_RG" \
+  --name "$STATE_CONTAINER"
 ```
 
-> Make sure the ACR name is globally unique. If the default name is not available, change it in the Terraform variables and workflow environment values.
+## 2. Create the deployment identity
 
-## 3. Create the Azure Container Apps environment
+The deploy job runs inside a GitHub Environment, so the subject of its OIDC
+token is `repo:<owner>/<repo>:environment:<name>`. A federated credential for a
+branch will not match. Create one credential per environment:
 
 ```bash
-az extension add --name containerapp --upgrade
-az containerapp env create \
-  --name cae-multi-cloud-demo \
-  --resource-group rg-multi-cloud-demo \
-  --location eastus
+APP_ID="$(az ad app create --display-name "github-enterprise-multi-cloud-cicd" --query appId -o tsv)"
+az ad sp create --id "$APP_ID"
+
+for env in dev prod; do
+  az ad app federated-credential create --id "$APP_ID" --parameters "{
+    \"name\": \"github-${env}\",
+    \"issuer\": \"https://token.actions.githubusercontent.com\",
+    \"subject\": \"repo:${REPO}:environment:${env}\",
+    \"audiences\": [\"api://AzureADTokenExchange\"]
+  }"
+done
 ```
 
-## 4. Create the identity for GitHub Actions
+## 3. Grant the identity what the workflow does
 
-You can use either:
-
-- a service principal, or
-- OIDC federation with GitHub Actions
-
-### Option A: Service principal
+- **Contributor** on the subscription, because OpenTofu creates the deployment
+  resource group. To scope it more tightly, create the resource group first,
+  import it into state, and grant Contributor on that group instead.
+- **Role Based Access Control Administrator**, constrained so it can only
+  assign or remove `AcrPull` (`7f951dda-4ed3-4680-a7ca-43fe172d538d`). OpenTofu
+  uses it to let the app's identity pull from the registry.
+- **Storage Blob Data Contributor** on the state container.
 
 ```bash
-az ad sp create-for-rbac \
-  --name "github-actions-multi-cloud" \
-  --role contributor \
-  --scopes /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/rg-multi-cloud-demo
+SCOPE="/subscriptions/${SUBSCRIPTION_ID}"
+
+az role assignment create --assignee "$APP_ID" --role Contributor --scope "$SCOPE"
+
+az role assignment create --assignee "$APP_ID" \
+  --role "Role Based Access Control Administrator" \
+  --scope "$SCOPE" \
+  --condition-version "2.0" \
+  --condition "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {7f951dda-4ed3-4680-a7ca-43fe172d538d})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {7f951dda-4ed3-4680-a7ca-43fe172d538d}))"
+
+STATE_ID="$(az storage account show --name "$STATE_ACCOUNT" --resource-group "$STATE_RG" --query id -o tsv)"
+az role assignment create --assignee "$APP_ID" \
+  --role "Storage Blob Data Contributor" \
+  --scope "${STATE_ID}/blobServices/default/containers/${STATE_CONTAINER}"
 ```
 
-Keep these values:
+## 4. Configure the GitHub Environments
 
-- appId
-- tenant
-- password
-
-### Option B: OIDC federation
-
-This is the preferred setup for GitHub Actions. Use the Azure docs to configure federated credentials between your GitHub repo and Azure, then set the following GitHub secrets:
-
-- `AZURE_CLIENT_ID`
-- `AZURE_TENANT_ID`
-- `AZURE_SUBSCRIPTION_ID`
-
-## 5. Configure GitHub secrets
-
-Set the repository secrets in GitHub:
+Repeat for `prod` with its own resource names. The registry name must be
+globally unique: 5-50 lowercase letters or digits.
 
 ```bash
-gh secret set AZURE_CLIENT_ID --body "<CLIENT_ID>"
-gh secret set AZURE_TENANT_ID --body "<TENANT_ID>"
-gh secret set AZURE_SUBSCRIPTION_ID --body "<SUBSCRIPTION_ID>"
+env=dev
+gh api --method PUT "repos/${REPO}/environments/${env}" >/dev/null
+
+gh secret set AZURE_CLIENT_ID       --repo "$REPO" --env "$env" --body "$APP_ID"
+gh secret set AZURE_TENANT_ID       --repo "$REPO" --env "$env" --body "$(az account show --query tenantId -o tsv)"
+gh secret set AZURE_SUBSCRIPTION_ID --repo "$REPO" --env "$env" --body "$SUBSCRIPTION_ID"
+
+gh variable set AZURE_RESOURCE_GROUP           --repo "$REPO" --env "$env" --body "rg-multi-cloud-${env}"
+gh variable set AZURE_LOCATION                 --repo "$REPO" --env "$env" --body "$LOCATION"
+gh variable set AZURE_ACR_NAME                 --repo "$REPO" --env "$env" --body "<uniqueacrname${env}>"
+gh variable set AZURE_CONTAINER_APP_ENV        --repo "$REPO" --env "$env" --body "cae-multi-cloud-${env}"
+gh variable set AZURE_CONTAINER_APP_NAME       --repo "$REPO" --env "$env" --body "multi-cloud-app"
+gh variable set AZURE_TF_STATE_RESOURCE_GROUP  --repo "$REPO" --env "$env" --body "$STATE_RG"
+gh variable set AZURE_TF_STATE_STORAGE_ACCOUNT --repo "$REPO" --env "$env" --body "$STATE_ACCOUNT"
+gh variable set AZURE_TF_STATE_CONTAINER       --repo "$REPO" --env "$env" --body "$STATE_CONTAINER"
 ```
 
-## 6. Validate the Terraform defaults
+For `prod`, add required reviewers and restrict deployment branches to `main` in
+**Settings > Environments > prod**. The workflow also refuses to deploy `prod`
+from any other branch.
 
-The Azure Terraform configuration is in:
-
-- `infra/azure/main.tf`
-- `infra/azure/variables.tf`
-
-You can override values in GitHub Actions by updating the environment variables in the workflow.
-
-## 7. Run the workflow
-
-Trigger the Azure deployment workflow in GitHub Actions:
-
-- `.github/workflows/deploy-azure.yml`
-
-This workflow does the following:
-
-1. authenticates to Azure
-2. runs Terraform
-3. builds the app image
-4. pushes it to Azure Container Registry
-5. deploys it to Azure Container Apps
-
-## 8. Check the live app URL
-
-After deployment succeeds, run:
+## 5. Deploy
 
 ```bash
-az containerapp show \
-  --name multi-cloud-app \
-  --resource-group rg-multi-cloud-demo \
-  --query properties.configuration.ingress.fqdn \
-  -o tsv
+gh workflow run deploy-azure.yml --repo "$REPO" -f environment=dev
+gh run watch --repo "$REPO"
 ```
 
-Then open the URL in a browser and confirm the health endpoint:
+The workflow:
 
-```text
-https://<fqdn>/health
-```
-
-## 9. Production notes
-
-For production, add:
-
-- environment approvals
-- separate dev/staging/prod resource groups
-- container image retention policies
-- Azure Monitor alerts
-- resource tagging and cost governance
+1. Signs in with OIDC; no client secret exists anywhere.
+2. Applies the registry, Container Apps environment, pull identity and its
+   `AcrPull` grant (phase 1).
+3. Builds the image with the commit SHA as its tag and version, and pushes it.
+4. Applies the Container App (phase 2).
+5. Polls `https://<app>/health` until the new revision reports the commit SHA,
+   then records the URL in the run summary and on the environment.
 
 ## Troubleshooting
 
-Common issues:
+| Symptom | Cause and fix |
+| --- | --- |
+| `AADSTS700213` or `No matching federated identity record` | The credential subject does not match. It must be exactly `repo:<owner>/<repo>:environment:<env>`. |
+| `AuthorizationFailed ... roleAssignments/write` | The RBAC Administrator assignment from step 3 is missing or its condition was mistyped. |
+| `The registry name is already in use` | ACR names are global. Pick another `AZURE_ACR_NAME`. |
+| The first revision fails to pull its image | A new `AcrPull` grant can take a few minutes to propagate. Run the workflow again; it is idempotent. |
+| `state blob is already locked` | A previous run was cancelled mid-apply. After confirming no run is active, run `tofu force-unlock <lock-id>` locally with the same backend settings. |
 
-- ACR name already taken
-- missing Azure Container Apps extension
-- GitHub Actions identity missing contributor rights
-- Terraform plan failing because resources already exist
+## Tear down
 
-If a Terraform apply fails, review the plan output and confirm the naming and location values are consistent with your subscription.
+```bash
+az group delete --name "rg-multi-cloud-dev" --yes
+az storage blob delete --account-name "$STATE_ACCOUNT" --container-name "$STATE_CONTAINER" \
+  --name "multi-cloud-app/dev.tfstate" --auth-mode login
+```
