@@ -152,7 +152,9 @@ scripts/                     Local pipeline and bootstrap checklists
 - No database passwords for the service: it signs in to PostgreSQL with its platform's identity,
   and only the migration job's identity can change the schema. Every database is private and
   verified over TLS.
-- Nothing deploys on push; deployments are dispatched and environment-protected.
+- `main` only changes through pull requests that pass every CI gate (the required `CI passed` check).
+- Nothing deploys on push; deployments are dispatched and environment-protected, and `prod`
+  needs an approval and only deploys from `main`.
 - Every third-party action is pinned to a full commit SHA.
 - The base image is pinned by digest, and Dependabot keeps pins current.
 - Images are tagged with the commit SHA, and deployments verify that commit is live.

@@ -81,6 +81,22 @@ jobs:
       health-path: /ready
       expect-version: true
 
+  # The one check that branch protection requires: it passes only when every gate above did,
+  # so adding or renaming a gate never needs a change to the protection rules
+  ci-passed:
+    name: CI passed
+    if: always()
+    needs: [python, repo-lint, infrastructure, container, helm]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check that every gate passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$RESULTS"
+          jq -e 'all(.[]; .result == "success")' <<<"$RESULTS" > /dev/null
+
   release:
     name: Record release metadata
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
