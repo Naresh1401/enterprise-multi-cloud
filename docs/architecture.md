@@ -27,9 +27,9 @@ flowchart LR
   op[Manual dispatch: dev or prod] --> serverless & k8s
 
   subgraph serverless[Serverless containers]
-    ecs[AWS: ECR, ECS Fargate, ALB]
-    run[GCP: Artifact Registry, Cloud Run]
-    aca[Azure: ACR, Container Apps]
+    ecs[AWS: ECR, RDS, ECS Fargate, ALB]
+    run[GCP: Artifact Registry, Cloud SQL, Cloud Run]
+    aca[Azure: ACR, PostgreSQL, Container Apps]
   end
 
   subgraph k8s[Deploy to Kubernetes]
@@ -38,7 +38,7 @@ flowchart LR
     k4 --> k5[Verify /ready reports the commit and the database]
   end
 
-  serverless --> verify[Verify /health reports the commit]
+  serverless --> verify[Migrate, then verify /ready reports the commit and the database]
 ```
 
 ## Components
@@ -52,9 +52,9 @@ flowchart LR
 | `.github/workflows/ci.yml` | Calls the shared quality and security gates on every push and pull request, including a kind install of the chart, and sets how strict each one is. |
 | `.github/workflows/deploy-aws.yml`, `deploy-gcp.yml`, `deploy-azure.yml` | Manually dispatched serverless deployments, one per cloud, protected by GitHub Environments. |
 | `.github/workflows/deploy-kubernetes.yml` | Manually dispatched Kubernetes deployment to GKE, AKS or EKS. |
-| `infra/aws/` | VPC with NAT, ECR, ECS cluster, Fargate service in private subnets, Application Load Balancer (HTTPS when a certificate is set). |
-| `infra/gcp/` | Artifact Registry, Cloud Run service, public invoker binding. |
-| `infra/azure/` | Resource group, Log Analytics, Container Registry, Container Apps environment, user-assigned pull identity with `AcrPull`, Container App. |
+| `infra/aws/` | VPC with NAT and database subnets, ECR, RDS, ECS cluster, Fargate service in private subnets whose tasks migrate the database first, Application Load Balancer (HTTPS when a certificate is set). |
+| `infra/gcp/` | Artifact Registry, a VPC for Direct VPC egress, Cloud SQL, service accounts for the service and the migration job, the migration job, Cloud Run service, public invoker binding. |
+| `infra/azure/` | Resource group, virtual network, Log Analytics, Container Registry, PostgreSQL flexible server, Container Apps environment in the network, managed identities for the app and the migration job, the migration job, Container App. |
 | `infra/eks/` | VPC across three zones with database subnets, EKS Auto Mode cluster, ECR, RDS, and Pod Identity roles for the service and the migration Job. |
 | `infra/gke/` | VPC with pod and service ranges, Cloud NAT, GKE Autopilot cluster with private nodes, Artifact Registry, Cloud SQL, and Workload Identity bindings for the service and the migration Job. |
 | `infra/aks/` | Resource group, virtual network, Container Registry, AKS cluster with Cilium networking and workload identity, a PostgreSQL flexible server, and federated managed identities for the service and the migration Job. |
@@ -80,8 +80,8 @@ database is reachable only from its own network, over TLS that verifies the serv
 
 **One image, six platforms.** Every target runs the same Dockerfile, tagged with the
 commit SHA and built with that SHA baked in as `APP_VERSION`. Each deployment ends by
-polling `/health` until the new code reports that SHA, which proves the new code is
-serving, not just that something is.
+polling `/ready` until the new code reports that SHA and a working database, which proves
+the new code is serving, not just that something is.
 
 **Registry first, then the service.** A service cannot be created before its image
 exists, and the image cannot be pushed before its registry exists. The serverless

@@ -3,9 +3,11 @@
 This guide sets up everything the **Deploy to Azure** workflow needs. You
 create only two things by hand: the storage that holds OpenTofu state, and the
 identity GitHub Actions signs in as. OpenTofu creates everything else (resource
-group, Log Analytics, Container Registry, Container Apps environment, the pull
-identity and the Container App). Do not create those resources yourself, or the
-first apply will fail because they already exist.
+group, virtual network, Log Analytics, Container Registry, a PostgreSQL flexible
+server with Entra sign-in only, the Container Apps environment, the app's and the
+migration job's identities, the migration job and the Container App). Do not
+create those resources yourself, or the first apply will fail because they
+already exist.
 
 ## Prerequisites
 
@@ -90,6 +92,14 @@ done
   nodes to their subnet.
 - **Storage Blob Data Contributor** on the state container.
 
+Register the resource providers the deployment uses, once per subscription:
+
+```bash
+for provider in Microsoft.App Microsoft.ContainerService Microsoft.DBforPostgreSQL Microsoft.Network Microsoft.OperationalInsights; do
+  az provider register --namespace "$provider"
+done
+```
+
 ```bash
 SCOPE="/subscriptions/${SUBSCRIPTION_ID}"
 
@@ -144,12 +154,17 @@ gh run watch --repo "$REPO"
 The workflow:
 
 1. Signs in with OIDC; no client secret exists anywhere.
-2. Applies the registry, Container Apps environment, pull identity and its
-   `AcrPull` grant (phase 1).
+2. Applies the virtual network, registry, Container Apps environment, the two
+   identities and their `AcrPull` grants (phase 1).
 3. Builds the image with the commit SHA as its tag and version, and pushes it.
-4. Applies the Container App (phase 2).
-5. Polls `https://<app>/health` until the new revision reports the commit SHA,
-   then records the URL in the run summary and on the environment.
+4. Applies the PostgreSQL server, with the migration identity as its Entra
+   administrator, and the migration job; then starts the job and waits for it to
+   succeed (phase 2). The first run takes 10 minutes or more while the server is
+   created.
+5. Applies the Container App (phase 3), which signs in to the database as
+   `app_user` with its managed identity.
+6. Polls `https://<app>/ready` until the new revision reports the commit SHA and a
+   working database, then records the URL in the run summary and on the environment.
 
 ## Troubleshooting
 
@@ -159,6 +174,8 @@ The workflow:
 | `AuthorizationFailed ... roleAssignments/write` | The RBAC Administrator assignment from step 3 is missing or its condition was mistyped. |
 | `The registry name is already in use` | ACR names are global. Pick another `AZURE_ACR_NAME`. |
 | The first revision fails to pull its image | A new `AcrPull` grant can take a few minutes to propagate. Run the workflow again; it is idempotent. |
+| The migration fails | Its output is under the job's **Execution history** in the portal, and in the Log Analytics workspace (`ContainerAppConsoleLogs_CL`). Right after the server is created, its Entra administrator can take a few minutes to become usable; run the workflow again. |
+| `ServerNameAlreadyExists` | PostgreSQL server names are global; the server is named `<AZURE_ACR_NAME>-pg`, so pick another registry name. |
 | `state blob is already locked` | A previous run was cancelled mid-apply. After confirming no run is active, run `tofu force-unlock <lock-id>` locally with the same backend settings. |
 
 ## Tear down

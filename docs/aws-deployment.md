@@ -120,9 +120,12 @@ then redirects to HTTPS.
 
 ## 5. Deploy
 
-- **Actions > Deploy to AWS** for ECS Fargate. The run creates the VPC, ECR, the ECS
-  cluster, load balancer and service, waits until the new tasks are steady, then checks
-  that `/health` reports the commit.
+- **Actions > Deploy to AWS** for ECS Fargate. The run creates the VPC, ECR, an RDS
+  PostgreSQL database, the ECS cluster, load balancer and service, waits until the new tasks
+  are steady, then checks that `/ready` reports the commit and a working database. Each task
+  first runs the migrations in its `migrate` container, signed in as the RDS administrator
+  with the password RDS generates and keeps in Secrets Manager; the app container then signs
+  in as `app_user` with IAM tokens.
 - **Actions > Deploy to Kubernetes**, cloud `eks`, for EKS Auto Mode. See
   [kubernetes-deployment.md](kubernetes-deployment.md).
 
@@ -131,7 +134,9 @@ then redirects to HTTPS.
 - **AccessDenied while assuming the role:** the trust policy's `sub` must match
   `repo:<owner>/<repo>:environment:<env>` exactly, and the workflow job must use that environment.
 - **The service never becomes steady:** the ECS console's service events show why tasks stop;
-  the container logs are in the `/ecs/<service>-<environment>` log group. A failed deployment
-  rolls back to the previous task definition automatically.
+  the container logs are in the `/ecs/<service>-<environment>` log group, with the migrations
+  under the `migrate/` streams. If the migrate container fails, the app container doesn't
+  start, and a failed deployment rolls back to the previous task definition automatically.
+- **The first apply takes 10 minutes or more:** RDS is creating the database.
 - **`tofu destroy` stops at the ECR repository in prod:** prod repositories keep their images;
   delete them first if you really mean to remove the repository.
