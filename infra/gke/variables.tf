@@ -72,3 +72,21 @@ variable "labels" {
   default     = {}
   description = "Extra labels applied to every resource"
 }
+
+variable "database_tier" {
+  type        = string
+  default     = "db-custom-1-3840"
+  description = "Cloud SQL machine type; db-custom-1-3840 allows 100 connections"
+}
+
+variable "kubernetes_namespace" {
+  type        = string
+  default     = "multi-cloud-app"
+  description = "Namespace the deploy workflow installs the chart in"
+}
+
+variable "release_name" {
+  type        = string
+  default     = "multi-cloud-app"
+  description = "Helm release name; the chart names its service accounts after it"
+}

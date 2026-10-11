@@ -32,6 +32,37 @@ resource "azurerm_resource_group" "this" {
   tags     = local.tags
 }
 
+# The cluster's nodes and the database share a virtual network, so the database needs no public endpoint
+resource "azurerm_virtual_network" "this" {
+  name                = local.name
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
+  address_space       = [var.vnet_cidr]
+  tags                = local.tags
+}
+
+resource "azurerm_subnet" "nodes" {
+  name                 = "nodes"
+  resource_group_name  = azurerm_resource_group.this.name
+  virtual_network_name = azurerm_virtual_network.this.name
+  address_prefixes     = [cidrsubnet(var.vnet_cidr, 6, 0)]
+}
+
+resource "azurerm_subnet" "database" {
+  name                 = "database"
+  resource_group_name  = azurerm_resource_group.this.name
+  virtual_network_name = azurerm_virtual_network.this.name
+  address_prefixes     = [cidrsubnet(var.vnet_cidr, 8, 8)]
+
+  delegation {
+    name = "postgresql"
+    service_delegation {
+      name    = "Microsoft.DBforPostgreSQL/flexibleServers"
+      actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
+    }
+  }
+}
+
 resource "azurerm_container_registry" "this" {
   name                = var.acr_name
   resource_group_name = azurerm_resource_group.this.name
@@ -62,6 +93,7 @@ resource "azurerm_kubernetes_cluster" "this" {
     name                        = "system"
     vm_size                     = var.node_vm_size
     os_sku                      = "AzureLinux"
+    vnet_subnet_id              = azurerm_subnet.nodes.id
     auto_scaling_enabled        = true
     min_count                   = var.node_min_count
     max_count                   = var.node_max_count
@@ -98,6 +130,14 @@ resource "azurerm_kubernetes_cluster" "this" {
   }
 
   tags = local.tags
+}
+
+# Nodes join the subnet when the cluster scales, which the cluster's identity does
+resource "azurerm_role_assignment" "cluster_network" {
+  scope                            = azurerm_subnet.nodes.id
+  role_definition_name             = "Network Contributor"
+  principal_id                     = azurerm_kubernetes_cluster.this.identity[0].principal_id
+  skip_service_principal_aad_check = true
 }
 
 # Lets the nodes pull images from the registry

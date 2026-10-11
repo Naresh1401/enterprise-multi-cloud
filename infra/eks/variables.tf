@@ -44,3 +44,21 @@ variable "tags" {
   default     = {}
   description = "Extra tags for every resource"
 }
+
+variable "database_instance_class" {
+  type        = string
+  default     = "db.t4g.micro"
+  description = "RDS instance class; size it for replicas x workers x 4 connections"
+}
+
+variable "kubernetes_namespace" {
+  type        = string
+  default     = "multi-cloud-app"
+  description = "Namespace the deploy workflow installs the chart in"
+}
+
+variable "release_name" {
+  type        = string
+  default     = "multi-cloud-app"
+  description = "Helm release name; the chart names its service accounts after it"
+}

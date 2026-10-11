@@ -71,3 +71,27 @@ variable "tags" {
   default     = {}
   description = "Extra tags for every resource"
 }
+
+variable "vnet_cidr" {
+  type        = string
+  default     = "10.60.0.0/16"
+  description = "Address space of the cluster's virtual network (nodes and database)"
+}
+
+variable "database_sku" {
+  type        = string
+  default     = "B_Standard_B1ms"
+  description = "PostgreSQL flexible server size; use a General Purpose SKU such as GP_Standard_D2ds_v5 for prod"
+}
+
+variable "kubernetes_namespace" {
+  type        = string
+  default     = "multi-cloud-app"
+  description = "Namespace the deploy workflow installs the chart in"
+}
+
+variable "release_name" {
+  type        = string
+  default     = "multi-cloud-app"
+  description = "Helm release name; the chart names its service accounts after it"
+}
