@@ -1,0 +1,28 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+exclude_also = ['if __name__ == "__main__":']
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# assert is how pytest checks results
+"tests/*" = ["S101"]
+# Binding to all interfaces is intended inside the container
+"app/main.py" = ["S104"]
+# Gunicorn's documented container setting: worker heartbeats live on tmpfs
+"gunicorn.conf.py" = ["S104", "S108"]

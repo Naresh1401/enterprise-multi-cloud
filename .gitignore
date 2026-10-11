@@ -8,3 +8,8 @@ terraform.tfstate.backup
 .DS_Store
 .pytest_cache/
 coverage/
+.coverage
+htmlcov/
+.ruff_cache/
+*.tfplan
+crash.log

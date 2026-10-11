@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: GitHub Environment used for deployment protection
+        description: GitHub Environment to deploy to (prod only from main)
         required: true
         default: dev
         type: choice
@@ -20,85 +20,145 @@ concurrency:
 
 jobs:
   deploy:
+    name: Deploy to Azure (${{ inputs.environment }})
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    timeout-minutes: 45
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.verify.outputs.url }}
     env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      IMAGE_TAG: ${{ github.sha }}
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
       AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
       AZURE_CONTAINER_APP_ENV: ${{ vars.AZURE_CONTAINER_APP_ENV }}
       AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
-      TF_STATE_STORAGE_ACCOUNT: ${{ vars.AZURE_TF_STATE_STORAGE_ACCOUNT }}
-      TF_STATE_CONTAINER: ${{ vars.AZURE_TF_STATE_CONTAINER }}
-      TF_STATE_RESOURCE_GROUP: ${{ vars.AZURE_TF_STATE_RESOURCE_GROUP }}
-      IMAGE_TAG: ${{ github.sha }}
+      AZURE_TF_STATE_RESOURCE_GROUP: ${{ vars.AZURE_TF_STATE_RESOURCE_GROUP }}
+      AZURE_TF_STATE_STORAGE_ACCOUNT: ${{ vars.AZURE_TF_STATE_STORAGE_ACCOUNT }}
+      AZURE_TF_STATE_CONTAINER: ${{ vars.AZURE_TF_STATE_CONTAINER }}
+      # OpenTofu authenticates with the same GitHub OIDC token as azure/login
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
     steps:
-      - uses: actions/checkout@v4
+      - name: Allow production deployments only from main
+        if: inputs.environment == 'prod' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::prod can only be deployed from main (this run is on ${GITHUB_REF_NAME})"
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Check required configuration
         run: |
-          set -euo pipefail
-          for value in AZURE_RESOURCE_GROUP AZURE_LOCATION AZURE_ACR_NAME AZURE_CONTAINER_APP_ENV AZURE_CONTAINER_APP_NAME TF_STATE_STORAGE_ACCOUNT TF_STATE_CONTAINER TF_STATE_RESOURCE_GROUP; do
-            test -n "${!value}" || { echo "::error::$value is not configured in the ${{ inputs.environment }} environment"; exit 1; }
+          missing=0
+          for name in AZURE_RESOURCE_GROUP AZURE_LOCATION AZURE_ACR_NAME AZURE_CONTAINER_APP_ENV \
+            AZURE_CONTAINER_APP_NAME AZURE_TF_STATE_RESOURCE_GROUP AZURE_TF_STATE_STORAGE_ACCOUNT \
+            AZURE_TF_STATE_CONTAINER; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Variable ${name} is not set in the ${DEPLOY_ENV} environment"
+              missing=1
+            fi
           done
-          test -n "${{ secrets.AZURE_CLIENT_ID }}" || { echo "::error::AZURE_CLIENT_ID is missing"; exit 1; }
-          test -n "${{ secrets.AZURE_TENANT_ID }}" || { echo "::error::AZURE_TENANT_ID is missing"; exit 1; }
-          test -n "${{ secrets.AZURE_SUBSCRIPTION_ID }}" || { echo "::error::AZURE_SUBSCRIPTION_ID is missing"; exit 1; }
+          # The secrets arrive through the ARM_* variables set on the job
+          require_secret() {
+            if [ -z "${!1:-}" ]; then
+              echo "::error::Secret $2 is not set in the ${DEPLOY_ENV} environment"
+              missing=1
+            fi
+          }
+          require_secret ARM_CLIENT_ID AZURE_CLIENT_ID
+          require_secret ARM_TENANT_ID AZURE_TENANT_ID
+          require_secret ARM_SUBSCRIPTION_ID AZURE_SUBSCRIPTION_ID
+          exit "$missing"
 
-      - name: Login to Azure
-        uses: azure/login@v2
+      - name: Export OpenTofu variables
+        run: |
+          {
+            echo "TF_VAR_environment=${DEPLOY_ENV}"
+            echo "TF_VAR_resource_group_name=${AZURE_RESOURCE_GROUP}"
+            echo "TF_VAR_location=${AZURE_LOCATION}"
+            echo "TF_VAR_acr_name=${AZURE_ACR_NAME}"
+            echo "TF_VAR_container_app_environment_name=${AZURE_CONTAINER_APP_ENV}"
+            echo "TF_VAR_container_app_name=${AZURE_CONTAINER_APP_NAME}"
+            echo "TF_VAR_image_tag=${IMAGE_TAG}"
+          } >> "$GITHUB_ENV"
+
+      - name: Sign in to Azure
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - uses: opentofu/setup-opentofu@v1
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_wrapper: false
 
-      - name: Initialize infrastructure state
+      - name: Initialize OpenTofu state
         working-directory: infra/azure
         run: |
-          tofu init -input=false \
-            -backend-config="resource_group_name=${TF_STATE_RESOURCE_GROUP}" \
-            -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
-            -backend-config="container_name=${TF_STATE_CONTAINER}" \
-            -backend-config="key=multi-cloud-app/${{ inputs.environment }}.tfstate"
+          tofu init \
+            -backend-config="resource_group_name=${AZURE_TF_STATE_RESOURCE_GROUP}" \
+            -backend-config="storage_account_name=${AZURE_TF_STATE_STORAGE_ACCOUNT}" \
+            -backend-config="container_name=${AZURE_TF_STATE_CONTAINER}" \
+            -backend-config="key=multi-cloud-app/${DEPLOY_ENV}.tfstate"
 
-      - name: Provision Azure registry and platform
+      # Phase 1: everything the image push and the first revision depend on,
+      # including the pull identity, so its AcrPull grant has time to propagate
+      - name: Provision registry, identity and platform
         working-directory: infra/azure
-        env:
-          TF_VAR_resource_group_name: ${{ env.AZURE_RESOURCE_GROUP }}
-          TF_VAR_location: ${{ env.AZURE_LOCATION }}
-          TF_VAR_acr_name: ${{ env.AZURE_ACR_NAME }}
-          TF_VAR_container_app_environment_name: ${{ env.AZURE_CONTAINER_APP_ENV }}
-          TF_VAR_container_app_name: ${{ env.AZURE_CONTAINER_APP_NAME }}
         run: |
-          tofu apply -input=false -auto-approve \
+          tofu apply -auto-approve \
             -target=azurerm_resource_group.rg \
             -target=azurerm_log_analytics_workspace.logs \
             -target=azurerm_container_registry.acr \
-            -target=azurerm_container_app_environment.cae
+            -target=azurerm_container_app_environment.cae \
+            -target=azurerm_user_assigned_identity.app \
+            -target=azurerm_role_assignment.acr_pull
 
       - name: Build and push image
         run: |
           set -euo pipefail
           az acr login --name "$AZURE_ACR_NAME"
           image="${AZURE_ACR_NAME}.azurecr.io/multi-cloud-app:${IMAGE_TAG}"
-          docker build --tag "$image" .
+          docker build --build-arg APP_VERSION="$IMAGE_TAG" --tag "$image" .
           docker push "$image"
 
-      - name: Deploy Azure Container App with Terraform
+      # Phase 2: the Container App itself, now that its image exists
+      - name: Deploy the Container App
         working-directory: infra/azure
-        env:
-          TF_VAR_resource_group_name: ${{ env.AZURE_RESOURCE_GROUP }}
-          TF_VAR_location: ${{ env.AZURE_LOCATION }}
-          TF_VAR_acr_name: ${{ env.AZURE_ACR_NAME }}
-          TF_VAR_container_app_environment_name: ${{ env.AZURE_CONTAINER_APP_ENV }}
-          TF_VAR_container_app_name: ${{ env.AZURE_CONTAINER_APP_NAME }}
-          TF_VAR_image_tag: ${{ env.IMAGE_TAG }}
-        run: tofu apply -input=false -auto-approve
+        run: tofu apply -auto-approve
 
-      - name: Smoke test deployment
+      - name: Verify the new revision is serving
+        id: verify
+        working-directory: infra/azure
         run: |
-          fqdn="$(az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)"
-          curl --fail --silent "https://${fqdn}/health"
-          echo "Azure Container App URL: https://${fqdn}"
+          set -euo pipefail
+          url="$(tofu output -raw container_app_url)"
+          for attempt in $(seq 1 30); do
+            if body="$(curl --fail --silent --max-time 10 "${url}/health")"; then
+              version="$(jq -r .version <<<"$body")"
+              if [ "$version" = "$IMAGE_TAG" ]; then
+                echo "url=${url}" >> "$GITHUB_OUTPUT"
+                {
+                  echo "### Deployed to Azure Container Apps (${DEPLOY_ENV})"
+                  echo "- URL: ${url}"
+                  echo "- Version: \`${version}\`"
+                } >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              echo "Attempt ${attempt}: still serving ${version}"
+            else
+              echo "Attempt ${attempt}: not healthy yet"
+            fi
+            sleep 10
+          done
+          echo "::error::${url} did not serve version ${IMAGE_TAG} within 5 minutes"
+          exit 1

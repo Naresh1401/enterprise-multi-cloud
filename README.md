@@ -1,131 +1,125 @@
 # Enterprise Multi-Cloud CI/CD
 
-This repository consolidates the application, delivery pipeline, and cloud
-infrastructure from the former `multi-cloud-cicd-blueprint` and
-`ai-cicd-private` repositories.
+[![CI/CD](https://github.com/Naresh1401/enterprise-multi-cloud-cicd/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/Naresh1401/enterprise-multi-cloud-cicd/actions/workflows/ci-cd.yml)
 
-The pipeline is self-contained: it tests and packages the application in this
-repository instead of cloning a second application repository at runtime.
-The same image is deployed to either Google Cloud Run or Azure Container Apps.
-
-## Delivery flow
+A Flask service and the delivery pipeline that ships it to **Google Cloud Run**
+or **Azure Container Apps**. Every change passes the same quality and security
+gates. Every deployment is a manually dispatched, OIDC-authenticated OpenTofu
+run that finishes only when the new commit is the one serving traffic.
 
 ```text
-Pull request/push
-  -> Python tests and syntax checks
-  -> OpenTofu format and validation
-  -> Docker build and /health smoke test
+Push or pull request
+  -> ruff, pytest (coverage gate), pip-audit
+  -> actionlint, shellcheck, hadolint
+  -> OpenTofu fmt and validate (Azure, GCP)
+  -> Trivy scan of the Dockerfile and OpenTofu
+  -> image build, /health smoke test, non-root check, Trivy image scan
   -> release metadata artifact (main only)
 
-Manual deployment
-  -> OIDC cloud authentication
-  -> provision registry/platform infrastructure
-  -> build and push image tagged with the commit SHA
-  -> apply the complete service configuration
-  -> HTTPS /health smoke test
+Manual deployment (dev or prod)
+  -> OIDC sign-in, no stored cloud keys
+  -> phase 1: registry and platform (and on Azure, the pull identity)
+  -> build and push the image tagged with the commit SHA
+  -> phase 2: the service itself
+  -> poll /health until it reports the deployed commit
 ```
+
+The design and its trade-offs are in [docs/architecture.md](docs/architecture.md).
+
+## Run it locally
+
+Requirements: Python 3.11+, Docker, OpenTofu (for `tofu-check`) and GNU make.
+
+```bash
+make check        # lint, tests with coverage, dependency audit
+make run          # dev server on http://localhost:8000
+make docker-run   # the production image (gunicorn, non-root)
+make tofu-check   # OpenTofu fmt and validate for both clouds
+make pipeline     # every gate plus an image build and container smoke test
+```
+
+If `python3` is older than 3.11, point the targets at a newer interpreter, for
+example `make check PYTHON=python3.11`. If port 8000 is taken, run the pipeline
+with `HOST_PORT=8080 make pipeline`.
+
+```console
+$ curl -s localhost:8000/health
+{"service":"enterprise-multi-cloud-cicd","status":"healthy","version":"dev"}
+```
+
+`/health` reports the commit the image was built from (`APP_VERSION`), which is
+how the pipeline confirms a deployment.
+
+## Deploy
+
+1. Set up the cloud side once with [docs/gcp-deployment.md](docs/gcp-deployment.md)
+   or [docs/azure-deployment.md](docs/azure-deployment.md). The guides create
+   only the OpenTofu state store and the deployment identity; OpenTofu creates
+   everything else.
+2. Add the variables and secrets below to the `dev` and `prod` GitHub
+   Environments. Give `prod` required reviewers.
+3. Run **Actions > Deploy to GCP** or **Deploy to Azure** and pick an
+   environment. `prod` can only be deployed from `main`.
+4. The run summary and the environment link show the live URL and the commit
+   it is serving.
+
+### GCP configuration
+
+| Name | Kind | Notes |
+| --- | --- | --- |
+| `GCP_PROJECT_ID` | variable | |
+| `GCP_REGION` | variable | for example `us-central1` |
+| `GCP_REPOSITORY` | variable | Artifact Registry repository, one per environment |
+| `GCP_SERVICE_NAME` | variable | Cloud Run service name |
+| `GCP_TF_STATE_BUCKET` | variable | existing versioned GCS bucket |
+| `GCP_RUNTIME_SERVICE_ACCOUNT` | variable | optional; service account Cloud Run runs as |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | secret | full provider resource name |
+| `GCP_SERVICE_ACCOUNT` | secret | deployer service account email |
+
+### Azure configuration
+
+| Name | Kind | Notes |
+| --- | --- | --- |
+| `AZURE_RESOURCE_GROUP` | variable | created by OpenTofu |
+| `AZURE_LOCATION` | variable | for example `eastus` |
+| `AZURE_ACR_NAME` | variable | globally unique, 5-50 lowercase letters or digits |
+| `AZURE_CONTAINER_APP_ENV` | variable | |
+| `AZURE_CONTAINER_APP_NAME` | variable | |
+| `AZURE_TF_STATE_RESOURCE_GROUP` | variable | existing state resource group |
+| `AZURE_TF_STATE_STORAGE_ACCOUNT` | variable | existing state storage account |
+| `AZURE_TF_STATE_CONTAINER` | variable | existing state container |
+| `AZURE_CLIENT_ID` | secret | Entra app with a federated credential per environment |
+| `AZURE_TENANT_ID` | secret | |
+| `AZURE_SUBSCRIPTION_ID` | secret | |
 
 ## Repository layout
 
 ```text
-app/                         Flask application
-tests/                       Application tests
-.github/workflows/ci-cd.yml  Self-contained CI and release metadata
-.github/workflows/deploy-gcp.yml
-.github/workflows/deploy-azure.yml
-infra/gcp/                   Artifact Registry and Cloud Run OpenTofu
-infra/azure/                 ACR and Container Apps OpenTofu
-docs/                        Architecture and operational runbooks
-scripts/                     Local and cloud bootstrap helpers
+app/                    Flask service
+tests/                  pytest suite (100% line and branch coverage of app/)
+gunicorn.conf.py        Production server settings (honours PORT)
+Dockerfile              Pinned base image, non-root user, healthcheck
+infra/gcp/              Artifact Registry and Cloud Run (OpenTofu)
+infra/azure/            ACR, Container Apps and the pull identity (OpenTofu)
+.github/workflows/      ci-cd.yml, deploy-gcp.yml, deploy-azure.yml
+.github/dependabot.yml  Weekly updates for Actions, pip and the base image
+docs/                   Architecture, deployment runbooks, production checklist
+scripts/                Local pipeline and bootstrap checklists
 ```
 
-## Local development
+## Safeguards
 
-Requirements: Python 3.11+ and Docker.
+- No long-lived cloud credentials: both clouds trust GitHub's OIDC token.
+- Nothing deploys on push; deployments are dispatched and environment-protected.
+- Every third-party action is pinned to a full commit SHA.
+- The base image is pinned by digest, and Dependabot keeps pins current.
+- Images are tagged with the commit SHA, and deployments verify that commit is live.
+- OpenTofu state is remote, versioned and separate per environment.
+- CI fails on fixable critical or high vulnerabilities and on IaC misconfigurations.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-PYTHONPATH=. pytest -q
-python app/main.py
-```
+## Background
 
-The service listens on `http://localhost:8000`; health is available at
-`/health`. To test the container:
-
-```bash
-docker build -t multi-cloud-app:local .
-docker run --rm -p 8000:8000 multi-cloud-app:local
-```
-
-## GitHub configuration
-
-Deployment is intentionally manual and protected by GitHub Environments
-(`dev` and `prod`). Configure the following **Environment variables**:
-
-### GCP
-
-- `GCP_PROJECT_ID`
-- `GCP_REGION`
-- `GCP_REPOSITORY`
-- `GCP_SERVICE_NAME`
-- `GCP_TF_STATE_BUCKET` (an existing, versioned GCS bucket)
-
-Environment secrets:
-
-- `GCP_WORKLOAD_IDENTITY_PROVIDER`
-- `GCP_SERVICE_ACCOUNT`
-
-The service account must be allowed to impersonate through the workload
-identity provider and have permissions for Artifact Registry, Cloud Run, and
-the Terraform state bucket.
-
-### Azure
-
-Environment variables:
-
-- `AZURE_RESOURCE_GROUP`
-- `AZURE_LOCATION`
-- `AZURE_ACR_NAME` (globally unique, lowercase alphanumeric)
-- `AZURE_CONTAINER_APP_ENV`
-- `AZURE_CONTAINER_APP_NAME`
-- `AZURE_TF_STATE_RESOURCE_GROUP`
-- `AZURE_TF_STATE_STORAGE_ACCOUNT`
-- `AZURE_TF_STATE_CONTAINER`
-
-Environment secrets:
-
-- `AZURE_CLIENT_ID`
-- `AZURE_TENANT_ID`
-- `AZURE_SUBSCRIPTION_ID`
-
-The federated identity needs permissions to manage the deployment resource
-group, the state storage account, and role assignments. The Container App's
-system-assigned identity receives `AcrPull` on the registry through OpenTofu.
-
-The state storage resources are intentionally not created by the deployment
-workflow. Create and protect them once using the provider bootstrap scripts,
-then grant the deployment identity access. This prevents a failed deployment
-from silently creating unmanaged state.
-
-## Deployment
-
-1. Configure the appropriate GitHub Environment variables and secrets.
-2. Run **Actions → Deploy to GCP** or **Actions → Deploy to Azure**.
-3. Select `dev` or `prod`; production should have required reviewers enabled.
-4. Confirm the workflow's HTTPS health check and recorded service URL.
-
-Both workflows use commit-SHA image tags, OIDC authentication, serialized
-deployments, remote state, and a two-phase infrastructure apply. The first
-phase creates the registry/platform needed to publish the image; the second
-phase deploys the now-existing image and service configuration.
-
-## Operational safeguards
-
-- No long-lived cloud service-account key is stored in GitHub.
-- No deployment occurs automatically on every push.
-- Terraform/OpenTofu state is remote and environment-specific.
-- Images are immutable commit-SHA tags rather than `latest`.
-- Deployment fails when required configuration is absent.
-- Each deployment ends with a live `/health` smoke test.
+This repository consolidates the application, pipeline and infrastructure that
+previously lived in `multi-cloud-cicd-blueprint` and `ai-cicd-private`. The
+pipeline builds this repository's own code instead of cloning a second
+repository at runtime.
