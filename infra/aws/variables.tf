@@ -41,8 +41,14 @@ variable "task_cpu" {
 
 variable "task_memory" {
   type        = number
-  default     = 512
+  default     = 1024
   description = "Fargate task memory in MiB"
+}
+
+variable "database_instance_class" {
+  type        = string
+  default     = "db.t4g.micro"
+  description = "RDS instance class; size it for tasks x workers x 4 connections"
 }
 
 variable "desired_count" {

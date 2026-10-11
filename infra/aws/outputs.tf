@@ -12,3 +12,8 @@ output "cluster_name" {
   value       = aws_ecs_cluster.app.name
   description = "ECS cluster name"
 }
+
+output "database_host" {
+  value       = module.database.address
+  description = "RDS endpoint"
+}
