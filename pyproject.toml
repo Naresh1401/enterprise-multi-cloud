@@ -20,8 +20,8 @@ line-length = 100
 select = ["E", "F", "W", "I", "B", "UP", "S"]
 
 [tool.ruff.lint.per-file-ignores]
-# assert is how pytest checks results
-"tests/*" = ["S101"]
+# assert is how pytest checks results, and the tests sign in with throwaway passwords
+"tests/*" = ["S101", "S105", "S106"]
 # Binding to all interfaces is intended inside the container
 "app/main.py" = ["S104"]
 # Gunicorn's documented container setting: worker heartbeats live on tmpfs
