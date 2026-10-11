@@ -25,3 +25,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # The local PostgreSQL matches the clouds' (17); move them to a new major version together
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
