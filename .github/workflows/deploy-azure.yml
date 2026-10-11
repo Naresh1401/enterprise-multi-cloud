@@ -110,9 +110,9 @@ jobs:
             -backend-config="container_name=${AZURE_TF_STATE_CONTAINER}" \
             -backend-config="key=multi-cloud-app/${DEPLOY_ENV}.tfstate"
 
-      # Phase 1: everything the image push and the first revision depend on,
-      # including the pull identity, so its AcrPull grant has time to propagate
-      - name: Provision registry, identity and platform
+      # Phase 1: everything the image push and the first revision depend on, including the
+      # pull identities, so their AcrPull grants have time to propagate
+      - name: Provision registry, identities and platform
         working-directory: infra/azure
         run: |
           tofu apply -auto-approve \
@@ -121,7 +121,9 @@ jobs:
             -target=azurerm_container_registry.acr \
             -target=azurerm_container_app_environment.cae \
             -target=azurerm_user_assigned_identity.app \
-            -target=azurerm_role_assignment.acr_pull
+            -target=azurerm_role_assignment.acr_pull \
+            -target=azurerm_user_assigned_identity.migration \
+            -target=azurerm_role_assignment.acr_pull_migration
 
       - name: Build and push image
         run: |
@@ -131,7 +133,35 @@ jobs:
           docker build --build-arg APP_VERSION="$IMAGE_TAG" --tag "$image" .
           docker push "$image"
 
-      # Phase 2: the Container App itself, now that its image exists
+      # Phase 2: the database and the migration job, which runs before the app changes
+      - name: Provision the database and the migration job
+        working-directory: infra/azure
+        run: tofu apply -auto-approve -target=azurerm_container_app_job.migrate
+
+      - name: Migrate the database
+        working-directory: infra/azure
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --only-show-errors
+          job="$(tofu output -raw migration_job_name)"
+          execution="$(az containerapp job start --name "$job" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query name --output tsv)"
+          echo "Started ${execution}"
+          for _ in $(seq 1 60); do
+            status="$(az containerapp job execution show --name "$job" --resource-group "$AZURE_RESOURCE_GROUP" \
+              --job-execution-name "$execution" --query properties.status --output tsv)"
+            case "$status" in
+              Succeeded) echo "The migrations succeeded"; exit 0 ;;
+              Failed|Stopped|Degraded)
+                echo "::error::Migration ${execution} ended as ${status}; its log is in the Log Analytics workspace (ContainerAppConsoleLogs_CL)"
+                exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "::error::Migration ${execution} did not finish within 10 minutes"
+          exit 1
+
+      # Phase 3: the Container App itself, now that its image exists and the schema is current
       - name: Deploy the Container App
         working-directory: infra/azure
         run: tofu apply -auto-approve
@@ -143,7 +173,8 @@ jobs:
           set -euo pipefail
           url="$(tofu output -raw container_app_url)"
           for attempt in $(seq 1 30); do
-            if body="$(curl --fail --silent --max-time 10 "${url}/health")"; then
+            # /ready answers 200 only when the new code can query its database
+            if body="$(curl --fail --silent --max-time 10 "${url}/ready")"; then
               version="$(jq -r .version <<<"$body")"
               if [ "$version" = "$IMAGE_TAG" ]; then
                 echo "url=${url}" >> "$GITHUB_OUTPUT"
@@ -151,14 +182,15 @@ jobs:
                   echo "### Deployed to Azure Container Apps (${DEPLOY_ENV})"
                   echo "- URL: ${url}"
                   echo "- Version: \`${version}\`"
+                  echo "- Database: $(jq -r .database <<<"$body")"
                 } >> "$GITHUB_STEP_SUMMARY"
                 exit 0
               fi
               echo "Attempt ${attempt}: still serving ${version}"
             else
-              echo "Attempt ${attempt}: not healthy yet"
+              echo "Attempt ${attempt}: not ready yet"
             fi
             sleep 10
           done
-          echo "::error::${url} did not serve version ${IMAGE_TAG} within 5 minutes"
+          echo "::error::${url} did not become ready with version ${IMAGE_TAG} within 5 minutes"
           exit 1

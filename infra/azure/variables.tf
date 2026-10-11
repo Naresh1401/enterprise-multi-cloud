@@ -83,3 +83,15 @@ variable "tags" {
   default     = {}
   description = "Extra tags applied to every resource"
 }
+
+variable "vnet_cidr" {
+  type        = string
+  default     = "10.70.0.0/16"
+  description = "Address space of the virtual network (Container Apps environment and database)"
+}
+
+variable "database_sku" {
+  type        = string
+  default     = "B_Standard_B1ms"
+  description = "PostgreSQL flexible server size; use a General Purpose SKU such as GP_Standard_D2ds_v5 for prod"
+}
