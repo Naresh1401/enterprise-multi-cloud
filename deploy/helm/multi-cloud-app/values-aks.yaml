@@ -1,0 +1,5 @@
+# AKS: the cluster's Azure Standard Load Balancer, probing the app's health endpoint
+service:
+  type: LoadBalancer
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path: /health

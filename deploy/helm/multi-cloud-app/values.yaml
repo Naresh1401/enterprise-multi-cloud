@@ -1,0 +1,85 @@
+# Defaults for any cluster; values-gke.yaml, values-aks.yaml and values-eks.yaml add each cloud's
+# load balancer settings.
+
+image:
+  # The deploy workflow sets the registry repository and the commit SHA as the tag
+  repository: multi-cloud-app
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# APP_ENV inside the container
+environment: dev
+
+# Used when autoscaling is off
+replicaCount: 2
+
+containerPort: 8000
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+  # For example eks.amazonaws.com/nlb on EKS Auto Mode
+  loadBalancerClass: ""
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""
+  tls: []
+
+serviceAccount:
+  create: true
+  # Defaults to the release's full name
+  name: ""
+  # For workload identity, for example iam.gke.io/gcp-service-account or eks.amazonaws.com/role-arn
+  annotations: {}
+
+podAnnotations: {}
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Lets traffic in on the HTTP port only, and nothing out except DNS
+networkPolicy:
+  enabled: true
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+# Spread replicas across zones where the cluster has several
+topologySpread:
+  enabled: true
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Image for the `helm test` connection check
+testImage: busybox:1.37
