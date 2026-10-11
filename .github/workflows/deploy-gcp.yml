@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: GitHub Environment used for deployment protection
+        description: GitHub Environment to deploy to (prod only from main)
         required: true
         default: dev
         type: choice
@@ -20,75 +20,132 @@ concurrency:
 
 jobs:
   deploy:
+    name: Deploy to GCP (${{ inputs.environment }})
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    timeout-minutes: 45
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.verify.outputs.url }}
     env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      IMAGE_TAG: ${{ github.sha }}
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       GCP_REGION: ${{ vars.GCP_REGION }}
       GCP_REPOSITORY: ${{ vars.GCP_REPOSITORY }}
       GCP_SERVICE_NAME: ${{ vars.GCP_SERVICE_NAME }}
-      TF_STATE_BUCKET: ${{ vars.GCP_TF_STATE_BUCKET }}
-      IMAGE_TAG: ${{ github.sha }}
+      GCP_TF_STATE_BUCKET: ${{ vars.GCP_TF_STATE_BUCKET }}
+      GCP_RUNTIME_SERVICE_ACCOUNT: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
     steps:
-      - uses: actions/checkout@v4
+      - name: Allow production deployments only from main
+        if: inputs.environment == 'prod' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::prod can only be deployed from main (this run is on ${GITHUB_REF_NAME})"
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Check required configuration
+        env:
+          WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
         run: |
-          set -euo pipefail
-          for value in GCP_PROJECT_ID GCP_REGION GCP_REPOSITORY GCP_SERVICE_NAME TF_STATE_BUCKET; do
-            test -n "${!value}" || { echo "::error::$value is not configured in the ${{ inputs.environment }} environment"; exit 1; }
+          missing=0
+          for name in GCP_PROJECT_ID GCP_REGION GCP_REPOSITORY GCP_SERVICE_NAME GCP_TF_STATE_BUCKET; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Variable ${name} is not set in the ${DEPLOY_ENV} environment"
+              missing=1
+            fi
           done
-          test -n "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" || { echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER is missing"; exit 1; }
-          test -n "${{ secrets.GCP_SERVICE_ACCOUNT }}" || { echo "::error::GCP_SERVICE_ACCOUNT is missing"; exit 1; }
+          if [ -z "$WORKLOAD_IDENTITY_PROVIDER" ]; then
+            echo "::error::Secret GCP_WORKLOAD_IDENTITY_PROVIDER is not set in the ${DEPLOY_ENV} environment"
+            missing=1
+          fi
+          if [ -z "$SERVICE_ACCOUNT" ]; then
+            echo "::error::Secret GCP_SERVICE_ACCOUNT is not set in the ${DEPLOY_ENV} environment"
+            missing=1
+          fi
+          exit "$missing"
+
+      - name: Export OpenTofu variables
+        run: |
+          {
+            echo "TF_VAR_environment=${DEPLOY_ENV}"
+            echo "TF_VAR_project_id=${GCP_PROJECT_ID}"
+            echo "TF_VAR_region=${GCP_REGION}"
+            echo "TF_VAR_repository_id=${GCP_REPOSITORY}"
+            echo "TF_VAR_service_name=${GCP_SERVICE_NAME}"
+            echo "TF_VAR_runtime_service_account=${GCP_RUNTIME_SERVICE_ACCOUNT}"
+            echo "TF_VAR_image_name=multi-cloud-app"
+            echo "TF_VAR_image_tag=${IMAGE_TAG}"
+          } >> "$GITHUB_ENV"
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
-      - uses: opentofu/setup-opentofu@v1
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_wrapper: false
 
-      - name: Initialize infrastructure state
+      - name: Initialize OpenTofu state
         working-directory: infra/gcp
-        run: tofu init -input=false -backend-config="bucket=${TF_STATE_BUCKET}" -backend-config="prefix=${GCP_SERVICE_NAME}/${{ inputs.environment }}"
+        run: |
+          tofu init \
+            -backend-config="bucket=${GCP_TF_STATE_BUCKET}" \
+            -backend-config="prefix=${GCP_SERVICE_NAME}/${DEPLOY_ENV}"
 
+      # Phase 1: the registry the image is pushed to
       - name: Provision Artifact Registry
         working-directory: infra/gcp
-        env:
-          TF_VAR_project_id: ${{ env.GCP_PROJECT_ID }}
-          TF_VAR_region: ${{ env.GCP_REGION }}
-          TF_VAR_repository_id: ${{ env.GCP_REPOSITORY }}
-        run: |
-          tofu apply -input=false -auto-approve \
-            -target=google_artifact_registry_repository.app_repo
+        run: tofu apply -auto-approve -target=google_artifact_registry_repository.app_repo
 
       - name: Build and push image
         run: |
           set -euo pipefail
-          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
-          image="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_REPOSITORY}/multi-cloud-app:${IMAGE_TAG}"
-          docker build --tag "$image" .
+          registry="${GCP_REGION}-docker.pkg.dev"
+          gcloud auth configure-docker "$registry" --quiet
+          image="${registry}/${GCP_PROJECT_ID}/${GCP_REPOSITORY}/multi-cloud-app:${IMAGE_TAG}"
+          docker build --build-arg APP_VERSION="$IMAGE_TAG" --tag "$image" .
           docker push "$image"
-          echo "IMAGE_URI=$image" >> "$GITHUB_ENV"
 
-      - name: Deploy Cloud Run with Terraform
+      # Phase 2: the Cloud Run service, now that its image exists
+      - name: Deploy Cloud Run
         working-directory: infra/gcp
-        env:
-          TF_VAR_project_id: ${{ env.GCP_PROJECT_ID }}
-          TF_VAR_region: ${{ env.GCP_REGION }}
-          TF_VAR_repository_id: ${{ env.GCP_REPOSITORY }}
-          TF_VAR_service_name: ${{ env.GCP_SERVICE_NAME }}
-          TF_VAR_image_tag: ${{ env.IMAGE_TAG }}
-          TF_VAR_image_name: multi-cloud-app
-        run: tofu apply -input=false -auto-approve
+        run: tofu apply -auto-approve
 
-      - name: Smoke test deployment
+      - name: Verify the new revision is serving
+        id: verify
+        working-directory: infra/gcp
         run: |
-          url="$(gcloud run services describe "$GCP_SERVICE_NAME" --region "$GCP_REGION" --format='value(status.url)')"
-          curl --fail --silent "$url/health"
-          echo "Cloud Run URL: $url"
+          set -euo pipefail
+          url="$(tofu output -raw service_url)"
+          for attempt in $(seq 1 30); do
+            if body="$(curl --fail --silent --max-time 10 "${url}/health")"; then
+              version="$(jq -r .version <<<"$body")"
+              if [ "$version" = "$IMAGE_TAG" ]; then
+                echo "url=${url}" >> "$GITHUB_OUTPUT"
+                {
+                  echo "### Deployed to Cloud Run (${DEPLOY_ENV})"
+                  echo "- URL: ${url}"
+                  echo "- Version: \`${version}\`"
+                } >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              echo "Attempt ${attempt}: still serving ${version}"
+            else
+              echo "Attempt ${attempt}: not healthy yet"
+            fi
+            sleep 10
+          done
+          echo "::error::${url} did not serve version ${IMAGE_TAG} within 5 minutes"
+          exit 1
