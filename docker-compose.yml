@@ -1,8 +1,10 @@
-version: '3.9'
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        APP_VERSION: local
     ports:
       - "8000:8000"
     environment:
-      APP_PORT: 8000
+      APP_ENV: development
