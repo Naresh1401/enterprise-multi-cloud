@@ -1,10 +1,58 @@
+# Local development and CI: the service, a PostgreSQL server and the migration job that runs
+# between them, wired the same way as in the clouds. The passwords are for this throwaway
+# database only; the clouds sign in without passwords (see docs/database.md).
+x-app: &app
+  image: multi-cloud-app:local
+  build:
+    context: .
+    args:
+      APP_VERSION: local
+  environment: &database
+    DB_AUTH: password
+    DB_HOST: db
+    DB_NAME: app
+    # The local server has no certificate; every cloud connection uses TLS
+    DB_SSLMODE: disable
+
 services:
-  app:
-    build:
-      context: .
-      args:
-        APP_VERSION: local
-    ports:
-      - "8000:8000"
+  db:
+    image: postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local-only-password
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      # Over TCP: during first start-up the server only listens on its socket
+      test: ["CMD", "pg_isready", "--host=127.0.0.1", "--username=postgres", "--dbname=app"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Creates the service's role and applies the migrations, then exits
+  migrate:
+    <<: *app
+    command: ["python", "-m", "app.migrate"]
+    environment:
+      <<: *database
+      DB_USER: postgres
+      DB_PASSWORD: local-only-password
+      DB_APP_ROLE: app_user
+      DB_APP_PASSWORD: app-local-password
+    depends_on:
+      db:
+        condition: service_healthy
+
+  app:
+    <<: *app
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      <<: *database
       APP_ENV: development
+      DB_USER: app_user
+      DB_PASSWORD: app-local-password
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
