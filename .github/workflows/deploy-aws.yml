@@ -1,0 +1,146 @@
+name: Deploy to AWS
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub Environment to deploy to (prod only from main)
+        required: true
+        default: dev
+        type: choice
+        options: [dev, prod]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-aws-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to AWS ECS (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.verify.outputs.url }}
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      IMAGE_TAG: ${{ github.sha }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_SERVICE_NAME: ${{ vars.AWS_SERVICE_NAME }}
+      AWS_TF_STATE_BUCKET: ${{ vars.AWS_TF_STATE_BUCKET }}
+      AWS_CERTIFICATE_ARN: ${{ vars.AWS_CERTIFICATE_ARN }}
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+    steps:
+      - name: Allow production deployments only from main
+        if: inputs.environment == 'prod' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::prod can only be deployed from main (this run is on ${GITHUB_REF_NAME})"
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check required configuration
+        env:
+          ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          missing=0
+          for name in AWS_REGION AWS_SERVICE_NAME AWS_TF_STATE_BUCKET; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Variable ${name} is not set in the ${DEPLOY_ENV} environment"
+              missing=1
+            fi
+          done
+          if [ -z "$ROLE_ARN" ]; then
+            echo "::error::Secret AWS_ROLE_ARN is not set in the ${DEPLOY_ENV} environment"
+            missing=1
+          fi
+          exit "$missing"
+
+      - name: Export OpenTofu variables
+        run: |
+          {
+            echo "TF_VAR_environment=${DEPLOY_ENV}"
+            echo "TF_VAR_region=${AWS_REGION}"
+            echo "TF_VAR_service_name=${AWS_SERVICE_NAME}"
+            echo "TF_VAR_certificate_arn=${AWS_CERTIFICATE_ARN}"
+            echo "TF_VAR_image_tag=${IMAGE_TAG}"
+          } >> "$GITHUB_ENV"
+
+      - name: Authenticate to AWS
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_wrapper: false
+
+      - name: Initialize OpenTofu state
+        working-directory: infra/aws
+        run: |
+          tofu init \
+            -backend-config="bucket=${AWS_TF_STATE_BUCKET}" \
+            -backend-config="key=${AWS_SERVICE_NAME}/${DEPLOY_ENV}/ecs.tfstate" \
+            -backend-config="region=${AWS_REGION}"
+
+      # Phase 1: the registry the image is pushed to
+      - name: Provision ECR
+        working-directory: infra/aws
+        run: tofu apply -auto-approve -target=aws_ecr_repository.app -target=aws_ecr_lifecycle_policy.app
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Build and push image
+        working-directory: infra/aws
+        run: |
+          set -euo pipefail
+          repository="$(tofu output -raw repository_url)"
+          # Tags are immutable, so a re-run for the same commit reuses its image
+          if aws ecr describe-images --repository-name "${repository#*/}" \
+              --image-ids "imageTag=${IMAGE_TAG}" > /dev/null 2>&1; then
+            echo "${repository}:${IMAGE_TAG} already exists"
+            exit 0
+          fi
+          docker build --build-arg APP_VERSION="$IMAGE_TAG" --tag "${repository}:${IMAGE_TAG}" "$GITHUB_WORKSPACE"
+          docker push "${repository}:${IMAGE_TAG}"
+
+      # Phase 2: the network, load balancer and ECS service, which waits until the new tasks are steady
+      - name: Deploy the ECS service
+        working-directory: infra/aws
+        run: tofu apply -auto-approve
+
+      - name: Verify the new tasks are serving
+        id: verify
+        working-directory: infra/aws
+        run: |
+          set -euo pipefail
+          url="$(tofu output -raw service_url)"
+          for attempt in $(seq 1 30); do
+            if body="$(curl --fail --silent --max-time 10 "${url}/health")"; then
+              version="$(jq -r .version <<<"$body")"
+              if [ "$version" = "$IMAGE_TAG" ]; then
+                echo "url=${url}" >> "$GITHUB_OUTPUT"
+                {
+                  echo "### Deployed to AWS ECS Fargate (${DEPLOY_ENV})"
+                  echo "- URL: ${url}"
+                  echo "- Version: \`${version}\`"
+                } >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              echo "Attempt ${attempt}: still serving ${version}"
+            else
+              echo "Attempt ${attempt}: not healthy yet"
+            fi
+            sleep 10
+          done
+          echo "::error::${url} did not serve version ${IMAGE_TAG} within 5 minutes"
+          exit 1

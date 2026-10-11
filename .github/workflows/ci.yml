@@ -37,7 +37,7 @@ jobs:
     name: OpenTofu
     uses: Naresh1401/github-cicd-workflows/.github/workflows/iac.yml@v1
     with:
-      directories: '["infra/azure", "infra/gcp"]'
+      directories: '["infra/aws", "infra/azure", "infra/gcp", "infra/eks", "infra/gke", "infra/aks"]'
       scan: enforce
 
   container:
@@ -51,10 +51,25 @@ jobs:
       require-non-root: true
       scan: enforce
 
+  helm:
+    name: Helm chart
+    uses: Naresh1401/github-cicd-workflows/.github/workflows/helm.yml@v1
+    with:
+      chart: deploy/helm/multi-cloud-app
+      values-files: |
+        values-gke.yaml
+        values-aks.yaml
+        values-eks.yaml
+      # Installs the chart on a kind cluster with the image built from this commit
+      kind-test: true
+      image-dockerfile: Dockerfile
+      version-build-arg: APP_VERSION
+      expect-version: true
+
   release:
     name: Record release metadata
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [python, repo-lint, infrastructure, container]
+    needs: [python, repo-lint, infrastructure, container, helm]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

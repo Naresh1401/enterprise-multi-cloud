@@ -1,0 +1,12 @@
+{{ include "app.fullname" . }} {{ include "app.version" . }} is installed.
+
+Check it from your machine:
+
+  kubectl port-forward --namespace {{ .Release.Namespace }} service/{{ include "app.fullname" . }} 8080:{{ .Values.service.port }}
+  curl http://127.0.0.1:8080/health
+{{- if eq .Values.service.type "LoadBalancer" }}
+
+Its public address appears once the cloud load balancer is ready:
+
+  kubectl get service --namespace {{ .Release.Namespace }} {{ include "app.fullname" . }}
+{{- end }}

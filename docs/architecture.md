@@ -1,11 +1,12 @@
 # Architecture
 
-One Flask service, one container image definition, and two deployment targets:
-Google Cloud Run and Azure Container Apps. The quality and security gates come
-from the shared workflows in
-[github-cicd-workflows](https://github.com/Naresh1401/github-cicd-workflows);
-this repository's own workflows run the deployments, and OpenTofu owns every
-cloud resource the service runs on.
+One Flask service, one container image definition, and six deployment targets across
+three clouds: a serverless container platform on each (ECS Fargate, Cloud Run, Azure
+Container Apps) and Kubernetes on each (EKS Auto Mode, GKE Autopilot, AKS) through a
+single Helm chart. The quality and security gates come from the shared workflows in
+[github-cicd-workflows](https://github.com/Naresh1401/github-cicd-workflows); this
+repository's own workflows run the deployments, and OpenTofu owns every cloud resource
+the service runs on.
 
 ```mermaid
 flowchart LR
@@ -14,25 +15,30 @@ flowchart LR
   subgraph ci[CI: shared workflows]
     py[Lint, test, audit]
     lint[actionlint, shellcheck, hadolint]
-    tofu[OpenTofu fmt and validate]
-    sec[Trivy config scan]
+    tofu[OpenTofu fmt and validate, six folders]
+    sec[Trivy config scan: OpenTofu, Dockerfile, Helm]
     img[Build, smoke test, Trivy image scan]
+    helm[Helm lint, kubeconform, kind install]
     py --> img
   end
 
   ci -->|main only| meta[Release metadata artifact]
 
-  op[Manual dispatch: dev or prod] --> gcp & az
+  op[Manual dispatch: dev or prod] --> serverless & k8s
 
-  subgraph gcp[Deploy to GCP]
-    g1[OIDC to Workload Identity Federation] --> g2[Apply Artifact Registry]
-    g2 --> g3[Build and push image] --> g4[Apply Cloud Run] --> g5[Verify /health reports the commit]
+  subgraph serverless[Serverless containers]
+    ecs[AWS: ECR, ECS Fargate, ALB]
+    run[GCP: Artifact Registry, Cloud Run]
+    aca[Azure: ACR, Container Apps]
   end
 
-  subgraph az[Deploy to Azure]
-    a1[OIDC to Entra ID] --> a2[Apply registry, environment, pull identity]
-    a2 --> a3[Build and push image] --> a4[Apply Container App] --> a5[Verify /health reports the commit]
+  subgraph k8s[Deploy to Kubernetes]
+    k1[OIDC sign-in] --> k2[OpenTofu: cluster and registry]
+    k2 --> k3[Build and push image] --> k4[helm upgrade with the cloud's values]
+    k4 --> k5[Verify /health reports the commit]
   end
+
+  serverless --> verify[Verify /health reports the commit]
 ```
 
 ## Components
@@ -41,46 +47,71 @@ flowchart LR
 | --- | --- |
 | `app/` | Flask service with `/` and `/health`. `/health` reports the commit it was built from (`APP_VERSION`). |
 | `Dockerfile` | Pinned `python:3.11-slim` base, gunicorn, non-root user (UID 10001), healthcheck. |
-| `.github/workflows/ci.yml` | Calls the shared quality and security gates from `github-cicd-workflows` on every push and pull request, and sets how strict each one is. |
-| `.github/workflows/deploy-*.yml` | Manually dispatched deployments, one per cloud, protected by GitHub Environments. |
+| `deploy/helm/multi-cloud-app/` | Helm chart for any cluster, with `values-gke.yaml`, `values-aks.yaml` and `values-eks.yaml` for each cloud's load balancer. |
+| `.github/workflows/ci.yml` | Calls the shared quality and security gates on every push and pull request, including a kind install of the chart, and sets how strict each one is. |
+| `.github/workflows/deploy-aws.yml`, `deploy-gcp.yml`, `deploy-azure.yml` | Manually dispatched serverless deployments, one per cloud, protected by GitHub Environments. |
+| `.github/workflows/deploy-kubernetes.yml` | Manually dispatched Kubernetes deployment to GKE, AKS or EKS. |
+| `infra/aws/` | VPC with NAT, ECR, ECS cluster, Fargate service in private subnets, Application Load Balancer (HTTPS when a certificate is set). |
 | `infra/gcp/` | Artifact Registry, Cloud Run service, public invoker binding. |
 | `infra/azure/` | Resource group, Log Analytics, Container Registry, Container Apps environment, user-assigned pull identity with `AcrPull`, Container App. |
+| `infra/eks/` | VPC across three zones, EKS Auto Mode cluster, ECR. |
+| `infra/gke/` | VPC with pod and service ranges, Cloud NAT, GKE Autopilot cluster with private nodes, Artifact Registry. |
+| `infra/aks/` | Resource group, Container Registry, AKS cluster with Cilium networking and workload identity, `AcrPull` for the nodes. |
 
 ## Design decisions
 
-**Identity without secrets.** Both deployments authenticate with the job's
-GitHub OIDC token. Azure trusts it through federated credentials scoped to each
-GitHub Environment (`repo:<owner>/<repo>:environment:<env>`); GCP trusts it
-through a Workload Identity Federation provider limited to this repository. No
-cloud key or client secret is stored in GitHub.
+**Identity without secrets.** Every deployment authenticates with the job's GitHub
+OIDC token. AWS trusts it through an IAM role limited to this repository's
+environments, Azure through federated credentials scoped to each GitHub Environment
+(`repo:<owner>/<repo>:environment:<env>`), and GCP through a Workload Identity
+Federation provider limited to this repository. No cloud key or client secret is
+stored in GitHub.
 
-**Two-phase apply.** The service cannot be created before its image exists, and
-the image cannot be pushed before its registry exists. Each deployment first
-applies the registry and platform, pushes the image, then applies everything
-else. On Azure, phase one also creates the app's pull identity and its
-`AcrPull` grant, so the role has propagated before the first revision pulls.
+**One image, six platforms.** Every target runs the same Dockerfile, tagged with the
+commit SHA and built with that SHA baked in as `APP_VERSION`. Each deployment ends by
+polling `/health` until the new code reports that SHA, which proves the new code is
+serving, not just that something is.
 
-**Immutable, traceable images.** Images are tagged with the commit SHA, never
-`latest`, and the same SHA is baked into the image and set on the service as
-`APP_VERSION`. Each deployment ends by polling `/health` until the new revision
-reports that SHA, which proves the new code is serving, not just that something
-is.
+**Registry first, then the service.** A service cannot be created before its image
+exists, and the image cannot be pushed before its registry exists. The serverless
+deployments apply the registry (and platform) first, push the image, then apply the
+rest. Kubernetes creates the cluster and registry together, then installs the chart.
 
-**Remote, per-environment state.** OpenTofu state lives in a versioned GCS
-bucket or Azure Storage container, with one state file per cloud and
-environment. Those stores are created once by hand so a failed deployment can
-never create unmanaged state.
+**One chart, cloud-specific values.** The chart holds everything that is the same on
+every cluster: security settings, probes, autoscaling, the disruption budget and the
+network policy. Each cloud's values file only changes the Service, so the three
+clusters run identical pods.
 
-**Gates before images.** The image is only built after lint, tests and the
-dependency audit pass, and CI fails on any critical or high vulnerability that
-has a fix available, in the image or in the Dockerfile and OpenTofu code.
+**Clusters the clouds run.** GKE Autopilot and EKS Auto Mode manage the nodes; AKS uses
+an autoscaling system pool with automatic upgrades. Nobody patches nodes by hand.
+
+**Kubernetes tested before any cloud.** CI installs the chart on a kind cluster with the
+image built from the commit and checks the commit it reports, so a broken chart fails
+the pull request rather than a deployment.
+
+**Remote, per-environment state.** OpenTofu state lives in a versioned S3 bucket, GCS
+bucket or Azure Storage container, with one state file per target and environment.
+Those stores are created once by hand so a failed deployment can never create unmanaged
+state.
+
+**Gates before images.** The image is only built after lint, tests and the dependency
+audit pass, and CI fails on any critical or high vulnerability that has a fix
+available, in the image or in the Dockerfile, OpenTofu and Helm code. The few accepted
+exceptions (a public load balancer, plain HTTP until a certificate is set, a public
+Kubernetes API endpoint for GitHub-hosted runners) are marked in the code with the reason.
 
 ## Trade-offs and next steps
 
-- Each deployment builds its image from the dispatched commit. Pushing the
-  CI-built image to a registry and promoting that exact digest would make every
-  environment run byte-identical artifacts.
-- Image signing (for example Sigstore cosign with keyless OIDC) and admission
-  policies would let each platform refuse unsigned images.
-- Canary or blue/green rollouts would use Cloud Run traffic splitting and Azure
-  Container Apps multiple-revision mode.
+- Each deployment builds its image from the dispatched commit. Pushing the CI-built
+  image to a registry and promoting that exact digest would make every environment run
+  byte-identical artifacts.
+- Image signing (for example Sigstore cosign with keyless OIDC) and admission policies
+  would let each platform refuse unsigned images.
+- The Kubernetes API endpoints are public because GitHub-hosted runners have no fixed
+  address; self-hosted runners inside each network would allow private endpoints.
+- The ECS load balancer serves plain HTTP until `AWS_CERTIFICATE_ARN` is set, and the
+  Kubernetes load balancers serve plain HTTP until an Ingress with TLS is added.
+- kind proves the chart, not each cloud's load balancer or identity integration; those
+  are verified by the deployment's own `/health` check.
+- Canary or blue/green rollouts would use Cloud Run traffic splitting, Container Apps
+  multiple-revision mode, ECS blue/green deployments, or Argo Rollouts on Kubernetes.

@@ -1,0 +1,3 @@
+# GKE Autopilot: an external passthrough Network Load Balancer in front of the pods
+service:
+  type: LoadBalancer
