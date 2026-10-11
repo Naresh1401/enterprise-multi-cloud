@@ -18,7 +18,7 @@ for short-lived Google credentials.
 ```bash
 PROJECT_ID="<project-id>"
 REGION="us-central1"
-REPO="Naresh1401/enterprise-multi-cloud-cicd"
+REPO="Naresh1401/enterprise-multi-cloud"
 STATE_BUCKET="${PROJECT_ID}-tfstate"
 DEPLOYER="github-deployer"
 POOL="github"

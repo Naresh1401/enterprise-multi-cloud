@@ -19,7 +19,7 @@ Set these once in your shell. The storage account name must be globally unique:
 ```bash
 SUBSCRIPTION_ID="<subscription-id>"
 LOCATION="eastus"
-REPO="Naresh1401/enterprise-multi-cloud-cicd"
+REPO="Naresh1401/enterprise-multi-cloud"
 STATE_RG="rg-multi-cloud-tfstate"
 STATE_ACCOUNT="<uniquestatename>"
 STATE_CONTAINER="tfstate"
@@ -65,7 +65,7 @@ token is `repo:<owner>/<repo>:environment:<name>`. A federated credential for a
 branch will not match. Create one credential per environment:
 
 ```bash
-APP_ID="$(az ad app create --display-name "github-enterprise-multi-cloud-cicd" --query appId -o tsv)"
+APP_ID="$(az ad app create --display-name "github-enterprise-multi-cloud" --query appId -o tsv)"
 az ad sp create --id "$APP_ID"
 
 for env in dev prod; do

@@ -4,7 +4,7 @@ Use this before treating a deployment as production.
 
 ## Repository
 
-- [ ] `main` requires pull requests and the **CI/CD** checks to pass
+- [ ] `main` requires pull requests and the **CI** checks to pass
 - [ ] The `prod` environment has required reviewers and only allows `main`
 - [ ] Dependabot pull requests (Actions, pip, Docker) are reviewed weekly
 

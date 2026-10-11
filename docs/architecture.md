@@ -1,14 +1,17 @@
 # Architecture
 
 One Flask service, one container image definition, and two deployment targets:
-Google Cloud Run and Azure Container Apps. GitHub Actions runs the gates and the
-deployments; OpenTofu owns every cloud resource the service runs on.
+Google Cloud Run and Azure Container Apps. The quality and security gates come
+from the shared workflows in
+[github-cicd-workflows](https://github.com/Naresh1401/github-cicd-workflows);
+this repository's own workflows run the deployments, and OpenTofu owns every
+cloud resource the service runs on.
 
 ```mermaid
 flowchart LR
   dev[Push or pull request] --> ci
 
-  subgraph ci[CI/CD workflow]
+  subgraph ci[CI: shared workflows]
     py[Lint, test, audit]
     lint[actionlint, shellcheck, hadolint]
     tofu[OpenTofu fmt and validate]
@@ -38,7 +41,7 @@ flowchart LR
 | --- | --- |
 | `app/` | Flask service with `/` and `/health`. `/health` reports the commit it was built from (`APP_VERSION`). |
 | `Dockerfile` | Pinned `python:3.11-slim` base, gunicorn, non-root user (UID 10001), healthcheck. |
-| `.github/workflows/ci-cd.yml` | Quality and security gates on every push and pull request. |
+| `.github/workflows/ci.yml` | Calls the shared quality and security gates from `github-cicd-workflows` on every push and pull request, and sets how strict each one is. |
 | `.github/workflows/deploy-*.yml` | Manually dispatched deployments, one per cloud, protected by GitHub Environments. |
 | `infra/gcp/` | Artifact Registry, Cloud Run service, public invoker binding. |
 | `infra/azure/` | Resource group, Log Analytics, Container Registry, Container Apps environment, user-assigned pull identity with `AcrPull`, Container App. |
