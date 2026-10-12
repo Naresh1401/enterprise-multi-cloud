@@ -60,6 +60,11 @@ mock_provider "azurerm" {
       oidc_issuer_url = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-0000000000aa/mock/"
     }
   }
+  mock_resource "azurerm_monitor_action_group" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-0000000000bb/resourceGroups/rg-mock/providers/Microsoft.Insights/actionGroups/mock"
+    }
+  }
 }
 
 variables {
@@ -79,6 +84,9 @@ run "dev" {
       azurerm_role_assignment.cluster_network,
       azurerm_federated_identity_credential.workload,
       module.database,
+      azurerm_monitor_diagnostic_setting.aks,
+      azurerm_monitor_metric_alert.node_cpu,
+      azurerm_monitor_metric_alert.node_memory,
     ]
   }
 
@@ -142,6 +150,53 @@ run "dev" {
       [for peer in yamldecode(output.helm_values).database.egress.to : peer.ipBlock.cidr] == ["10.60.8.0/24"]
     )
     error_message = "The chart values must carry both identities, the migration user and the database subnet."
+  }
+  assert {
+    condition = (
+      azurerm_kubernetes_cluster.this.oms_agent[0].log_analytics_workspace_id == azurerm_log_analytics_workspace.logs.id &&
+      azurerm_monitor_diagnostic_setting.aks.log_analytics_workspace_id == azurerm_log_analytics_workspace.logs.id
+    )
+    error_message = "Container Insights and the control plane's logs must both reach the same Log Analytics workspace."
+  }
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.node_cpu.criteria[0].metric_name == "node_cpu_usage_percentage" &&
+      azurerm_monitor_metric_alert.node_memory.criteria[0].metric_name == "node_memory_working_set_percentage" &&
+      length(azurerm_monitor_action_group.alerts) == 0 &&
+      length(azurerm_monitor_metric_alert.node_cpu.action) == 0
+    )
+    error_message = "The cluster must have its own node alerts, unnotified without alert_email."
+  }
+}
+
+run "alerts" {
+  command = plan
+
+  variables {
+    environment         = "dev"
+    acr_name            = "examplemulticloud"
+    resource_group_name = "rg-multi-cloud-aks-dev"
+    alert_email         = "ops@example.com"
+  }
+
+  plan_options {
+    target = [
+      azurerm_container_registry.this,
+      azurerm_role_assignment.cluster_network,
+      azurerm_federated_identity_credential.workload,
+      module.database,
+      azurerm_monitor_diagnostic_setting.aks,
+      azurerm_monitor_metric_alert.node_cpu,
+      azurerm_monitor_metric_alert.node_memory,
+    ]
+  }
+
+  assert {
+    condition = (
+      azurerm_monitor_action_group.alerts[0].email_receiver[0].email_address == "ops@example.com" &&
+      one(azurerm_monitor_metric_alert.node_cpu.action).action_group_id == azurerm_monitor_action_group.alerts[0].id
+    )
+    error_message = "alert_email must notify the cluster's node alerts through its own action group."
   }
 }
 

@@ -77,3 +77,15 @@ variable "tags" {
   default     = {}
   description = "Tags for every resource"
 }
+
+variable "action_group_id" {
+  type        = string
+  default     = ""
+  description = "Azure Monitor action group for the CPU, storage and connection alerts; empty leaves them unmonitored"
+}
+
+variable "connection_alarm_threshold" {
+  type        = number
+  default     = 80
+  description = "Active connections sustained for 15 minutes that triggers the connections alert"
+}

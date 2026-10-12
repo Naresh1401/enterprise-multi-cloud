@@ -95,3 +95,15 @@ variable "release_name" {
   default     = "multi-cloud-app"
   description = "Helm release name; the chart names its service accounts after it"
 }
+
+variable "alert_email" {
+  type        = string
+  default     = ""
+  description = "Email address for database and cluster node alerts; empty leaves them unmonitored"
+}
+
+variable "log_analytics_workspace_name" {
+  type        = string
+  default     = "law-multi-cloud-aks"
+  description = "Log Analytics workspace name for Container Insights and the control plane's logs"
+}

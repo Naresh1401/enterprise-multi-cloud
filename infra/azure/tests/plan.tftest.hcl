@@ -60,6 +60,16 @@ mock_provider "azurerm" {
       oidc_issuer_url = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-0000000000aa/mock/"
     }
   }
+  mock_resource "azurerm_container_app" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-0000000000bb/resourceGroups/rg-mock/providers/Microsoft.App/containerApps/mock"
+    }
+  }
+  mock_resource "azurerm_monitor_action_group" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-0000000000bb/resourceGroups/rg-mock/providers/Microsoft.Insights/actionGroups/mock"
+    }
+  }
 }
 
 variables {
@@ -170,5 +180,31 @@ run "dev" {
   assert {
     condition     = output.migration_job_name == "multi-cloud-app-migrate"
     error_message = "The deploy workflow finds the job by this output."
+  }
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.restarts.criteria[0].metric_name == "RestartCount" &&
+      azurerm_monitor_metric_alert.error_rate.criteria[0].metric_name == "Requests" &&
+      contains(one(azurerm_monitor_metric_alert.error_rate.criteria[0].dimension).values, "5XX") &&
+      length(azurerm_monitor_action_group.alerts) == 0 &&
+      length(azurerm_monitor_metric_alert.restarts.action) == 0
+    )
+    error_message = "The app must have its own restart and 5xx alerts, unnotified without alert_email."
+  }
+}
+
+run "alerts" {
+  command = plan
+
+  variables {
+    alert_email = "ops@example.com"
+  }
+
+  assert {
+    condition = (
+      azurerm_monitor_action_group.alerts[0].email_receiver[0].email_address == "ops@example.com" &&
+      one(azurerm_monitor_metric_alert.restarts.action).action_group_id == azurerm_monitor_action_group.alerts[0].id
+    )
+    error_message = "alert_email must notify the app's alerts through its own action group."
   }
 }

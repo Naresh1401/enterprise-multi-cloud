@@ -72,6 +72,15 @@ resource "azurerm_container_registry" "this" {
   tags                = local.tags
 }
 
+resource "azurerm_log_analytics_workspace" "logs" {
+  name                = var.log_analytics_workspace_name
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+  tags                = local.tags
+}
+
 # The API server stays reachable from GitHub-hosted runners, which have no fixed address;
 # api_allowed_cidrs narrows who can reach it
 #trivy:ignore:AZU-0041
@@ -88,6 +97,11 @@ resource "azurerm_kubernetes_cluster" "this" {
   oidc_issuer_enabled               = true
   workload_identity_enabled         = true
   role_based_access_control_enabled = true
+
+  # Container Insights: pod and node metrics and logs, without a self-managed agent
+  oms_agent {
+    log_analytics_workspace_id = azurerm_log_analytics_workspace.logs.id
+  }
 
   default_node_pool {
     name                        = "system"
