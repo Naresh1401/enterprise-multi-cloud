@@ -250,7 +250,9 @@ jobs:
         if: always()
         run: kubectl logs "job/${RELEASE}-migrate" --namespace "$NAMESPACE" --all-containers || true
 
-      - name: Verify the new pods are serving
+      # The checks in scripts/verify-deployment.sh, first through the Service from inside the
+      # cluster, then through the cloud load balancer the way users reach it
+      - name: Verify the deployment end to end
         id: verify
         run: |
           set -euo pipefail
@@ -258,36 +260,29 @@ jobs:
             --selector "app.kubernetes.io/instance=${RELEASE}" --output jsonpath='{.items[0].metadata.name}')"
           kubectl port-forward --namespace "$NAMESPACE" "service/${service}" 18080:80 \
             > "$RUNNER_TEMP/port-forward.log" 2>&1 &
-          for attempt in $(seq 1 30); do
-            # /ready answers 200 only when the pod can query its database
-            if body="$(curl --fail --silent --max-time 5 http://127.0.0.1:18080/ready)"; then
-              version="$(jq -r .version <<<"$body")"
-              if [ "$version" = "$IMAGE_TAG" ]; then
-                # The cloud load balancer can take a few minutes; report its address once it has one
-                address=""
-                for _ in $(seq 1 30); do
-                  address="$(kubectl get service "$service" --namespace "$NAMESPACE" --output \
-                    jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}')"
-                  if [ -n "$address" ]; then break; fi
-                  sleep 10
-                done
-                url="${address:+http://${address}}"
-                echo "url=${url}" >> "$GITHUB_OUTPUT"
-                {
-                  echo "### Deployed to ${CLOUD} (${DEPLOY_ENV})"
-                  echo "- Cluster: ${CLUSTER_NAME}"
-                  echo "- URL: ${url:-load balancer still provisioning; see kubectl get service}"
-                  echo "- Version: \`${version}\`"
-                  echo "- Database: $(jq -r .database <<<"$body")"
-                } >> "$GITHUB_STEP_SUMMARY"
-                exit 0
-              fi
-              echo "Attempt ${attempt}: still serving ${version}"
-            else
-              echo "Attempt ${attempt}: not ready yet"
-            fi
-            sleep 5
+          trap 'cat "$RUNNER_TEMP/port-forward.log"' ERR
+          {
+            echo "### Deployed to ${CLOUD} (${DEPLOY_ENV})"
+            echo "- Cluster: ${CLUSTER_NAME}"
+            echo "- Commit: \`${IMAGE_TAG}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # dev also writes an item and reads it back; prod's data is only read
+          write=()
+          if [ "$DEPLOY_ENV" = dev ]; then write=(--write); fi
+          WAIT_SECONDS=150 "$GITHUB_WORKSPACE/scripts/verify-deployment.sh" http://127.0.0.1:18080 "$IMAGE_TAG" "${write[@]}"
+
+          # A new cloud load balancer can take a few minutes to get its address and pass health checks
+          address=""
+          for _ in $(seq 1 30); do
+            address="$(kubectl get service "$service" --namespace "$NAMESPACE" --output \
+              jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}')"
+            if [ -n "$address" ]; then break; fi
+            sleep 10
           done
-          cat "$RUNNER_TEMP/port-forward.log"
-          echo "::error::The release did not become ready with version ${IMAGE_TAG}"
-          exit 1
+          if [ -z "$address" ]; then
+            echo "::error::The Service's load balancer got no address within 5 minutes; see kubectl describe service ${service}"
+            exit 1
+          fi
+          echo "url=http://${address}" >> "$GITHUB_OUTPUT"
+          echo "- URL: http://${address}" >> "$GITHUB_STEP_SUMMARY"
+          WAIT_SECONDS=600 "$GITHUB_WORKSPACE/scripts/verify-deployment.sh" "http://${address}" "$IMAGE_TAG"
