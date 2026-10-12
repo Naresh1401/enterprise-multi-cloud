@@ -84,6 +84,7 @@ module "database" {
   client_security_group_ids = [aws_security_group.task.id]
   instance_class            = var.database_instance_class
   alert_email               = var.alert_email
+  kms_key_arn               = local.kms_key_arn
 }
 
 # Phase 1 of a deployment applies only this, so the image can be pushed before the service exists
@@ -97,8 +98,11 @@ resource "aws_ecr_repository" "app" {
     scan_on_push = true
   }
 
+  # AWS's own aws/ecr key by default; a customer-managed one only if given one. Set once, at
+  # creation: changing it later replaces the repository and its images.
   encryption_configuration {
     encryption_type = "KMS"
+    kms_key         = local.kms_key_arn != "" ? local.kms_key_arn : null
   }
 }
 
@@ -130,6 +134,7 @@ resource "aws_ecs_cluster" "app" {
 resource "aws_cloudwatch_log_group" "app" {
   name              = "/ecs/${local.name}"
   retention_in_days = 30
+  kms_key_id        = local.kms_key_arn != "" ? local.kms_key_arn : null
 }
 
 data "aws_iam_policy_document" "ecs_tasks_assume" {

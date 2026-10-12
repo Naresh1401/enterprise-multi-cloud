@@ -11,6 +11,7 @@ module "database" {
   client_cidr_blocks = module.vpc.private_subnets_cidr_blocks
   instance_class     = var.database_instance_class
   alert_email        = var.alert_email
+  kms_key_arn        = local.kms_key_arn
 }
 
 data "aws_iam_policy_document" "pod_identity_assume" {

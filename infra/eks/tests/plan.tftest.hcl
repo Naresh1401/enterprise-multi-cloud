@@ -152,3 +152,19 @@ run "alerts" {
     error_message = "With alert_email, the cluster alarms must notify the same topic as the database's."
   }
 }
+
+run "customer_managed_key" {
+  command = plan
+
+  variables {
+    enable_customer_managed_key = true
+  }
+
+  assert {
+    condition = (
+      aws_kms_key.this[0].enable_key_rotation &&
+      aws_ecr_repository.app.encryption_configuration[0].kms_key == aws_kms_key.this[0].arn
+    )
+    error_message = "enable_customer_managed_key must encrypt the repository with this target's own key."
+  }
+}

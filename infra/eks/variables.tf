@@ -68,3 +68,9 @@ variable "alert_email" {
   default     = ""
   description = "Email address for database and cluster alarms; empty leaves them unmonitored"
 }
+
+variable "enable_customer_managed_key" {
+  type        = bool
+  default     = false
+  description = "Encrypt the image repository and database with a customer-managed KMS key instead of AWS's own. Set before the first apply: enabling it later replaces the repository and the database"
+}

@@ -54,6 +54,18 @@ variable "max_allocated_storage" {
   description = "Storage autoscaling limit in GiB"
 }
 
+variable "storage_iops" {
+  type        = number
+  default     = null
+  description = "Provisioned IOPS for gp3 storage; null uses the per-GiB free baseline (3,000 up to 400 GiB)"
+}
+
+variable "storage_throughput" {
+  type        = number
+  default     = null
+  description = "Provisioned throughput in MiBps for gp3 storage; null uses the per-GiB free baseline (125 MiB/s up to 400 GiB)"
+}
+
 variable "database_name" {
   type        = string
   default     = "app"
@@ -88,4 +100,10 @@ variable "connection_alarm_threshold" {
   type        = number
   default     = 80
   description = "Open connections sustained for 15 minutes that triggers the connections alarm"
+}
+
+variable "kms_key_arn" {
+  type        = string
+  default     = ""
+  description = "Customer-managed KMS key for storage and Performance Insights; empty uses AWS-managed keys. Can only be set when the database is created, not added later"
 }

@@ -112,8 +112,11 @@ resource "aws_ecr_repository" "app" {
     scan_on_push = true
   }
 
+  # AWS's own aws/ecr key by default; a customer-managed one only if given one. Set once, at
+  # creation: changing it later replaces the repository and its images.
   encryption_configuration {
     encryption_type = "KMS"
+    kms_key         = local.kms_key_arn != "" ? local.kms_key_arn : null
   }
 }
 

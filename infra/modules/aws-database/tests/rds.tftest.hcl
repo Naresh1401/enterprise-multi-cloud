@@ -204,3 +204,33 @@ run "prod" {
     error_message = "prod must be protected from deletion, keep a final snapshot and apply changes in the maintenance window."
   }
 }
+
+run "customer_managed_key" {
+  command = plan
+
+  variables {
+    kms_key_arn = "arn:aws:kms:us-east-1:111122223333:key/mock"
+  }
+
+  assert {
+    condition = (
+      aws_db_instance.this.kms_key_id == "arn:aws:kms:us-east-1:111122223333:key/mock" &&
+      aws_db_instance.this.performance_insights_kms_key_id == "arn:aws:kms:us-east-1:111122223333:key/mock"
+    )
+    error_message = "kms_key_arn must encrypt both storage and Performance Insights."
+  }
+}
+
+run "provisioned_storage_performance" {
+  command = plan
+
+  variables {
+    storage_iops       = 6000
+    storage_throughput = 250
+  }
+
+  assert {
+    condition     = aws_db_instance.this.iops == 6000 && aws_db_instance.this.storage_throughput == 250
+    error_message = "storage_iops and storage_throughput must provision gp3 above its free baseline."
+  }
+}

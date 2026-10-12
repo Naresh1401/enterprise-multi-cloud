@@ -50,6 +50,11 @@ mock_provider "aws" {
       }]
     }
   }
+  mock_resource "aws_kms_key" {
+    defaults = {
+      arn = "arn:aws:kms:us-east-1:111122223333:key/mock-cmk"
+    }
+  }
 }
 
 variables {
@@ -225,5 +230,22 @@ run "alerts" {
       contains(aws_cloudwatch_metric_alarm.alb_5xx.alarm_actions, module.database.alarm_topic_arn)
     )
     error_message = "With alert_email, the ECS and load balancer alarms must notify the same topic as the database's."
+  }
+}
+
+run "customer_managed_key" {
+  command = plan
+
+  variables {
+    enable_customer_managed_key = true
+  }
+
+  assert {
+    condition = (
+      aws_kms_key.this[0].enable_key_rotation &&
+      aws_ecr_repository.app.encryption_configuration[0].kms_key == aws_kms_key.this[0].arn &&
+      aws_cloudwatch_log_group.app.kms_key_id == aws_kms_key.this[0].arn
+    )
+    error_message = "enable_customer_managed_key must encrypt the repository and container logs with the same key."
   }
 }
