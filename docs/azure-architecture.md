@@ -23,9 +23,9 @@ in the [Azure deployment guide](azure-deployment.md), the chart in
 [database.md](database.md).
 
 - [Container Apps](#container-apps)
-  - [Request path](#aca-request-path) · [Network](#aca-network) · [Compute](#aca-compute) · [Registry](#aca-registry) · [Database](#aca-database) · [Identity and access](#aca-identity-and-access) · [Logs and metrics](#aca-logs-and-metrics) · [Every resource](#aca-every-resource) · [Deployment flow](#aca-deployment-flow) · [Verify a deployment](#aca-verify-a-deployment)
+  - [Request path](#aca-request-path) · [Network](#aca-network) · [Compute](#aca-compute) · [Registry](#aca-registry) · [Database](#aca-database) · [Encryption](#aca-encryption) · [Identity and access](#aca-identity-and-access) · [Logs and metrics](#aca-logs-and-metrics) · [Every resource](#aca-every-resource) · [Deployment flow](#aca-deployment-flow) · [Verify a deployment](#aca-verify-a-deployment)
 - [AKS](#aks)
-  - [Request path](#aks-request-path) · [Network](#aks-network) · [Cluster](#aks-cluster) · [Workload identities](#aks-workload-identities) · [Database](#aks-database) · [Logs and metrics](#aks-logs-and-metrics) · [Every resource](#aks-every-resource) · [Deployment flow](#aks-deployment-flow) · [Verify a deployment](#aks-verify-a-deployment)
+  - [Request path](#aks-request-path) · [Network](#aks-network) · [Cluster](#aks-cluster) · [Workload identities](#aks-workload-identities) · [Database](#aks-database) · [Encryption](#aks-encryption) · [Logs and metrics](#aks-logs-and-metrics) · [Every resource](#aks-every-resource) · [Deployment flow](#aks-deployment-flow) · [Verify a deployment](#aks-verify-a-deployment)
 - [Check it without an Azure subscription](#check-it-without-an-azure-subscription)
 - [Not included](#not-included)
 
@@ -133,7 +133,8 @@ From [`infra/modules/azure-database`](../infra/modules/azure-database), shared w
 | Setting | Value |
 | --- | --- |
 | Server `azurerm_postgresql_flexible_server.this` | `<AZURE_ACR_NAME>-pg` (the registry's name is globally unique already), PostgreSQL 17, `B_Standard_B1ms` (`database_sku`; a General Purpose SKU in `prod`) |
-| Storage | 32 GB, growing automatically |
+| Storage (block storage) | 32 GB (`storage_mb`), growing automatically; IOPS and throughput scale with it, General Purpose SSD |
+| Encryption | Azure's own key by default; `key_vault_key_id` (see [Encryption](#aca-encryption)) encrypts it instead, wrapped by `key_vault_user_assigned_identity_id`. Set once, at creation: changing it later replaces the server |
 | Network | VNet integration: an address in the delegated `database` subnet, the private DNS zone, no public endpoint |
 | Sign-in | Microsoft Entra only; password authentication is off, so there is no password administrator |
 | Administrator | `azurerm_postgresql_flexible_server_active_directory_administrator.migration`: the migration job's managed identity (`ServicePrincipal`) |
@@ -146,6 +147,27 @@ From [`infra/modules/azure-database`](../infra/modules/azure-database), shared w
 The migration job creates `app_user` with `pgaadauth_create_principal_with_oid`, tied to the
 app identity's object ID rather than its name, and grants it read and write access to the `app`
 schema's tables; see [database.md](database.md#migrations).
+
+<a id="aca-encryption"></a>
+
+### Encryption
+
+Azure's own key encrypts the server by default. `enable_customer_managed_key` creates a Key
+Vault, `azurerm_key_vault.database` (name `key_vault_name`, globally unique), a key in it,
+`azurerm_key_vault_key.database` (RSA 2048, wrap and unwrap only), and a user-assigned identity,
+`azurerm_user_assigned_identity.database_key`, that the server uses to wrap and unwrap with it
+(`key_vault_user_assigned_identity_id`, `key_vault_key_id`). Access policies, not RBAC, grant key
+permissions: one for the identity running OpenTofu (create, get, list, wrap, unwrap, delete,
+purge), one for the server's identity (get, wrap, unwrap only).
+
+Azure requires the vault to have purge protection before it accepts a customer-managed key, so
+destroying this environment leaves the vault soft-deleted for `soft_delete_retention_days` (7):
+applying again with the same `key_vault_name` fails until that window passes, or until someone
+with Key Vault purge rights removes it by hand. Enabling this after the server already exists
+forces OpenTofu to replace it, since it can't switch to a customer-managed key in place.
+
+The registry isn't covered: a customer-managed key for ACR needs the Premium SKU (this registry
+uses Basic), which adds its own ongoing cost beyond the key itself.
 
 <a id="aca-identity-and-access"></a>
 
@@ -190,6 +212,9 @@ What one `tofu apply` in `infra/azure` creates, as `scripts/inventory.sh azure` 
 | `azurerm_virtual_network.this` | The virtual network |
 | `azurerm_subnet.apps` | Subnet for the Container Apps environment |
 | `azurerm_subnet.database` | Subnet for the server |
+| `azurerm_user_assigned_identity.database_key` | With `enable_customer_managed_key`: wraps and unwraps the database's key |
+| `azurerm_key_vault.database` | Holds the key, with purge protection |
+| `azurerm_key_vault_key.database` | Encrypts the database instead of Azure's own key |
 | `azurerm_container_registry.acr` | Image registry |
 | `azurerm_container_app_environment.cae` | The Container Apps environment |
 | `azurerm_user_assigned_identity.app` | The app's identity |
@@ -397,6 +422,17 @@ The same module and settings as [Container Apps' database](#aca-database), named
 identity `multi-cloud-dev-migrate` and creates `app_user` for `multi-cloud-dev-app`'s object ID.
 The tenant comes from `data.azurerm_client_config.current`.
 
+<a id="aks-encryption"></a>
+
+### Encryption
+
+The same pattern as [Container Apps'](#aca-encryption): `enable_customer_managed_key` creates
+this target's own Key Vault, key and user-assigned identity
+(`azurerm_key_vault.database`, `azurerm_key_vault_key.database`,
+`azurerm_user_assigned_identity.database_key`). The ACR registry isn't covered: a
+customer-managed key for it needs the Premium SKU (this cluster uses Standard), which adds its
+own ongoing cost beyond the key itself.
+
 <a id="aks-logs-and-metrics"></a>
 
 ### Logs and metrics
@@ -425,6 +461,9 @@ after creating the cluster):
 | `azurerm_virtual_network.this` | The virtual network |
 | `azurerm_subnet.nodes` | Node subnet |
 | `azurerm_subnet.database` | Server subnet |
+| `azurerm_user_assigned_identity.database_key` | With `enable_customer_managed_key`: wraps and unwraps the database's key |
+| `azurerm_key_vault.database` | Holds the key, with purge protection |
+| `azurerm_key_vault_key.database` | Encrypts the database instead of Azure's own key |
 | `azurerm_container_registry.this` | Image registry |
 | `azurerm_log_analytics_workspace.logs` | Container Insights and the control plane's logs, 30 days |
 | `azurerm_kubernetes_cluster.this` | The AKS cluster |
@@ -540,6 +579,8 @@ sign-in, TLS being required, and the `dev` and `prod` differences. See
   with a certificate and a domain would add TLS. (The Container Apps URL is HTTPS already.)
 - **Azure Front Door or Application Gateway with a web application firewall.**
 - **Private registries** (Premium SKU with private endpoints) and **Microsoft Defender for Cloud**.
+  A customer-managed key for ACR needs that same Premium SKU; the database's key
+  (`enable_customer_managed_key`) doesn't.
 - **Geo-redundant backups** of the server, and **budgets** in Azure Monitor (`alert_email` wires
   the CPU, storage, connections, restart, error rate and AKS node CPU/memory alerts, with
   Container Insights and the control plane's logs now in Log Analytics).

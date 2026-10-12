@@ -289,5 +289,10 @@ marked in the code with the reason.
 - Alerts exist for every target's own metrics and each database (CPU, storage, connections,
   restarts or error rate, and `prod` failover), gated behind an `alert_email` variable that's
   empty by default; no budgets are set. Each cloud's page lists exactly what's covered.
+- Customer-managed keys for each database, image repository and (AWS) container logs exist,
+  gated behind `enable_customer_managed_key`; off by default, since enabling it after a database
+  or repository already exists forces OpenTofu to replace it. Each cloud's page explains the
+  one-time setup this needs (Azure's Key Vault, for example, needs purge protection and leaves a
+  soft-deleted vault behind for a week after `tofu destroy`).
 - Canary or blue/green rollouts would use Cloud Run traffic splitting, Container Apps
   multiple-revision mode, ECS blue/green deployments, or Argo Rollouts on Kubernetes.
