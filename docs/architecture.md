@@ -286,7 +286,8 @@ marked in the code with the reason.
 - On GKE and AKS the pods may open HTTPS connections to any address, because the identity and
   Cloud SQL Admin endpoints have no fixed ranges; an egress gateway or FQDN policies would narrow
   that.
-- Nothing alerts on the collected metrics and logs yet, and no budgets are set; each cloud's page
-  lists what monitoring exists and what is not included.
+- Alerts exist for every target's own metrics and each database (CPU, storage, connections,
+  restarts or error rate, and `prod` failover), gated behind an `alert_email` variable that's
+  empty by default; no budgets are set. Each cloud's page lists exactly what's covered.
 - Canary or blue/green rollouts would use Cloud Run traffic splitting, Container Apps
   multiple-revision mode, ECS blue/green deployments, or Argo Rollouts on Kubernetes.
