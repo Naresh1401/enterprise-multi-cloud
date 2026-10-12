@@ -45,6 +45,24 @@ resource "azurerm_postgresql_flexible_server" "this" {
   private_dns_zone_id           = azurerm_private_dns_zone.this.id
   public_network_access_enabled = false
 
+  # Azure's own key by default; a customer-managed one, wrapped by the given identity, only if
+  # given one. Both can only be set when the server is created, not added to one that exists.
+  dynamic "identity" {
+    for_each = var.key_vault_key_id != "" ? [1] : []
+    content {
+      type         = "UserAssigned"
+      identity_ids = [var.key_vault_user_assigned_identity_id]
+    }
+  }
+
+  dynamic "customer_managed_key" {
+    for_each = var.key_vault_key_id != "" ? [1] : []
+    content {
+      key_vault_key_id                  = var.key_vault_key_id
+      primary_user_assigned_identity_id = var.key_vault_user_assigned_identity_id
+    }
+  }
+
   authentication {
     active_directory_auth_enabled = true
     password_auth_enabled         = false

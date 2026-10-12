@@ -5,6 +5,7 @@ mock_provider "azurerm" {
     defaults = {
       tenant_id       = "00000000-0000-0000-0000-0000000000aa"
       subscription_id = "00000000-0000-0000-0000-0000000000bb"
+      object_id       = "00000000-0000-0000-0000-0000000000ee"
     }
   }
   mock_resource "azurerm_resource_group" {
@@ -68,6 +69,16 @@ mock_provider "azurerm" {
   mock_resource "azurerm_monitor_action_group" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-0000000000bb/resourceGroups/rg-mock/providers/Microsoft.Insights/actionGroups/mock"
+    }
+  }
+  mock_resource "azurerm_key_vault" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-0000000000bb/resourceGroups/rg-mock/providers/Microsoft.KeyVault/vaults/mock"
+    }
+  }
+  mock_resource "azurerm_key_vault_key" {
+    defaults = {
+      id = "https://mock.vault.azure.net/keys/database/mockversion"
     }
   }
 }
@@ -207,4 +218,36 @@ run "alerts" {
     )
     error_message = "alert_email must notify the app's alerts through its own action group."
   }
+}
+
+run "customer_managed_key" {
+  command = plan
+
+  variables {
+    enable_customer_managed_key = true
+    key_vault_name              = "examplemulticloudkv"
+  }
+
+  assert {
+    condition = (
+      azurerm_key_vault.database[0].rbac_authorization_enabled == false &&
+      azurerm_key_vault.database[0].purge_protection_enabled &&
+      length(azurerm_key_vault.database[0].access_policy) == 2
+    )
+    error_message = "The vault must use access policies (not RBAC), with purge protection, and grant both the deployer and the server's identity."
+  }
+  assert {
+    condition     = length(azurerm_key_vault_key.database[0].key_opts) == 2 && contains(azurerm_key_vault_key.database[0].key_opts, "wrapKey") && contains(azurerm_key_vault_key.database[0].key_opts, "unwrapKey")
+    error_message = "The key must only wrap and unwrap, nothing else."
+  }
+}
+
+run "customer_managed_key_without_name" {
+  command = plan
+
+  variables {
+    enable_customer_managed_key = true
+  }
+
+  expect_failures = [azurerm_key_vault.database]
 }

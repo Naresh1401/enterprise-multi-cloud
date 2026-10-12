@@ -101,3 +101,20 @@ variable "alert_email" {
   default     = ""
   description = "Email address for database, restart and error-rate alerts; empty leaves them unmonitored"
 }
+
+variable "enable_customer_managed_key" {
+  type        = bool
+  default     = false
+  description = "Encrypt the database with a customer-managed Key Vault key instead of Azure's own. Set before the first apply: enabling it later replaces the server"
+}
+
+variable "key_vault_name" {
+  type        = string
+  default     = ""
+  description = "Globally unique Key Vault name (3-24 characters); required when enable_customer_managed_key is true"
+
+  validation {
+    condition     = var.key_vault_name == "" || can(regex("^[a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9]$", var.key_vault_name))
+    error_message = "key_vault_name must be empty or 3-24 letters, digits or hyphens, starting with a letter."
+  }
+}

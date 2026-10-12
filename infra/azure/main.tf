@@ -146,18 +146,20 @@ module "database" {
   source = "../modules/azure-database"
 
   # The registry name is already globally unique, so the server's name is too
-  server_name          = "${var.acr_name}-pg"
-  environment          = var.environment
-  resource_group_name  = azurerm_resource_group.rg.name
-  location             = azurerm_resource_group.rg.location
-  virtual_network_id   = azurerm_virtual_network.this.id
-  delegated_subnet_id  = azurerm_subnet.database.id
-  tenant_id            = data.azurerm_client_config.current.tenant_id
-  admin_principal_id   = azurerm_user_assigned_identity.migration.principal_id
-  admin_principal_name = azurerm_user_assigned_identity.migration.name
-  sku_name             = var.database_sku
-  tags                 = local.tags
-  action_group_id      = local.action_group_id
+  server_name                         = "${var.acr_name}-pg"
+  environment                         = var.environment
+  resource_group_name                 = azurerm_resource_group.rg.name
+  location                            = azurerm_resource_group.rg.location
+  virtual_network_id                  = azurerm_virtual_network.this.id
+  delegated_subnet_id                 = azurerm_subnet.database.id
+  tenant_id                           = data.azurerm_client_config.current.tenant_id
+  admin_principal_id                  = azurerm_user_assigned_identity.migration.principal_id
+  admin_principal_name                = azurerm_user_assigned_identity.migration.name
+  sku_name                            = var.database_sku
+  tags                                = local.tags
+  action_group_id                     = local.action_group_id
+  key_vault_key_id                    = local.key_vault_key_id
+  key_vault_user_assigned_identity_id = local.key_vault_user_assigned_identity_id
 }
 
 # Runs the migrations; the deploy workflow starts it and waits for it before it updates the app
