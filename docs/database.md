@@ -56,9 +56,10 @@ publicly trusted certificates. The Cloud SQL connector does its own verification
 | GKE | Cloud SQL, private IP only, connector connections only | Google service account through Workload Identity Federation | A Helm hook Job with its own service account (`cloudsqlsuperuser`) |
 | AKS | Azure Database for PostgreSQL flexible server, delegated subnet, Entra sign-in only | Managed identity through Microsoft Entra Workload ID | A Helm hook Job whose managed identity is the server's Entra administrator |
 
-[kubernetes-deployment.md](kubernetes-deployment.md#the-databases) and the
-[AWS](aws-deployment.md), [Google Cloud](gcp-deployment.md) and [Azure](azure-deployment.md)
-guides describe what OpenTofu creates for each.
+The [AWS](aws-architecture.md), [Google Cloud](gcp-architecture.md) and
+[Azure](azure-architecture.md) architecture pages describe what OpenTofu creates for each, and
+[kubernetes-architecture.md](kubernetes-architecture.md#the-migration-hook) the chart's
+migration hook.
 
 ## Roles
 

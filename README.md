@@ -34,7 +34,20 @@ Manual deployment (dev or prod)
   -> poll /ready until it reports the deployed commit and a working database
 ```
 
-The design and its trade-offs are in [docs/architecture.md](docs/architecture.md).
+## Architecture and deployment flows
+
+| Read | For |
+| --- | --- |
+| [docs/architecture.md](docs/architecture.md) | The whole system: the six targets, CI, how a deployment runs, identities, state |
+| [docs/aws-architecture.md](docs/aws-architecture.md) | ECS Fargate and EKS: every resource, the deployment flow step by step, commands to check a deployment |
+| [docs/gcp-architecture.md](docs/gcp-architecture.md) | Cloud Run and GKE, the same |
+| [docs/azure-architecture.md](docs/azure-architecture.md) | Container Apps and AKS, the same |
+| [docs/kubernetes-architecture.md](docs/kubernetes-architecture.md) | The Helm chart, its migration hook and the Kubernetes deployment flow |
+| [docs/database.md](docs/database.md) | Connecting, signing in without passwords, migrations |
+
+Every architecture page's claims are checked: OpenTofu tests plan each target against mock
+providers in CI, `make inventory` lists every resource a target would create without a cloud
+account, and `scripts/verify-deployment.sh` checks a live deployment end to end.
 
 ## Run it locally
 
@@ -45,9 +58,11 @@ make up           # the service with PostgreSQL and its migrations on http://loc
 make check        # lint, tests with coverage against PostgreSQL, dependency audit
 make run          # dev server without a database on http://localhost:8000
 make docker-run   # the production image (gunicorn, non-root)
-make tofu-check   # OpenTofu fmt and validate for every cloud
+make tofu-check   # OpenTofu fmt, validate and tests (plans against mock providers) for every cloud
+make inventory    # every resource each target would create, without a cloud account
 make helm-check   # lint and render the chart with each cloud's values
-make pipeline     # every gate plus an image build and container smoke test
+make pipeline     # lint, tests and audit, then an image build and container smoke test
+make verify URL=https://... VERSION=<commit>   # check a live deployment end to end
 ```
 
 If `python3` is older than 3.11, point the targets at a newer interpreter, for
@@ -127,7 +142,8 @@ To try the Kubernetes chart on a local kind cluster, see
 ```text
 app/                         Flask service, its PostgreSQL connections and the migration job
 app/migrations/              Alembic migrations
-tests/                       pytest suite against PostgreSQL (100% line and branch coverage of app/)
+tests/                       pytest suite against PostgreSQL (100% line and branch coverage of app/),
+                             and checks that the docs cover every resource and deploy step
 docker-compose.yml           The service, PostgreSQL and the migration job, for local work and CI
 gunicorn.conf.py             Production server settings (honours PORT)
 Dockerfile                   Pinned base image, non-root user, healthcheck
@@ -142,8 +158,8 @@ infra/modules/               The PostgreSQL setup for each cloud, shared by its 
 deploy/kind/                 A throwaway PostgreSQL for installing the chart on kind
 .github/workflows/           ci.yml (shared gates) and one deploy workflow per platform
 trivy.yaml                   Misconfiguration scan settings
-docs/                        Architecture, deployment runbooks, production checklist
-scripts/                     Local pipeline and bootstrap checklists
+docs/                        Architecture per cloud, deployment guides, database, production checklist
+scripts/                     Deployment checks, resource inventory, local pipeline, bootstrap checklists
 ```
 
 ## Safeguards

@@ -6,62 +6,21 @@ cluster, its registry and its PostgreSQL database with OpenTofu the first time, 
 pushes the image, migrates the database, installs the chart with that cloud's values, and
 finishes only when `/ready` reports the deployed commit and a working database.
 
-## What the chart sets up
+## What gets deployed
 
-- A Deployment of the image with rolling updates that never drop below the desired
-  replicas, and replicas spread across zones. Liveness checks `/health`; readiness checks
-  `/ready`, which also queries the database, so traffic only reaches pods that can serve it
-- A migration Job that runs before every install and upgrade (a Helm hook) with its own
-  service account and identity. If it fails, the upgrade stops and the running pods keep
-  serving. See [database.md](database.md)
-- Pods that run as UID 10001 with a read-only root filesystem, no Linux capabilities,
-  no privilege escalation, the RuntimeDefault seccomp profile and no service account token
-- CPU and memory requests and a memory limit
-- A HorizontalPodAutoscaler (2 to 6 replicas at 70% CPU) and a PodDisruptionBudget that
-  keeps one replica up during node maintenance
-- NetworkPolicies that admit only the HTTP port and let out only DNS, the database's private
-  range and the cloud's identity endpoint
-- A Service (ClusterIP by default), an optional Ingress, and a `helm test` connection check
-
-Each cloud's values file sets how traffic gets in and how the pods sign in to the database:
-
-| Values file | Load balancer | Database sign-in |
+| Cluster | OpenTofu | Architecture, every resource and the checks |
 | --- | --- | --- |
-| `values-gke.yaml` | External passthrough Network Load Balancer | IAM, through the Cloud SQL connector |
-| `values-aks.yaml` | Azure Standard Load Balancer, probing `/health` | Microsoft Entra tokens |
-| `values-eks.yaml` | Internet-facing Network Load Balancer from EKS Auto Mode, targeting pod IPs | RDS IAM tokens |
+| EKS Auto Mode, with RDS | [`infra/eks`](../infra/eks) | [aws-architecture.md](aws-architecture.md#eks-auto-mode) |
+| GKE Autopilot, with Cloud SQL | [`infra/gke`](../infra/gke) | [gcp-architecture.md](gcp-architecture.md#gke-autopilot) |
+| AKS, with Azure Database for PostgreSQL | [`infra/aks`](../infra/aks) | [azure-architecture.md](azure-architecture.md#aks) |
 
-The deploy workflow adds a third file, the `helm_values` that OpenTofu outputs: the
-database's address, the identities and the database's network range. The files in
-[`ci/`](../deploy/helm/multi-cloud-app/ci) are examples of it, which CI renders with each
-cloud's values.
-
-## The clusters
-
-| Folder | Cluster | Also creates |
-| --- | --- | --- |
-| [`infra/gke`](../infra/gke) | GKE Autopilot, regional, REGULAR release channel, private nodes | VPC and subnet with pod and service ranges, Cloud NAT, Artifact Registry with pull access for the nodes |
-| [`infra/aks`](../infra/aks) | AKS with an autoscaling Azure Linux system pool, Azure CNI overlay with Cilium network policy, workload identity, stable automatic upgrades | Resource group, Container Registry with `AcrPull` for the nodes |
-| [`infra/eks`](../infra/eks) | EKS Auto Mode (AWS runs the nodes, load balancing and storage), control-plane logs, KMS-encrypted secrets | VPC across three zones with NAT, ECR repository |
+What the chart puts in each cluster (the Deployment, the migration hook, the network policies,
+each cloud's values) and every step of the workflow are in
+[kubernetes-architecture.md](kubernetes-architecture.md).
 
 The Kubernetes API endpoints are public because GitHub-hosted runners have no fixed
 address. Set the `api_allowed_cidrs` variable to narrow them, or use self-hosted runners
 and private endpoints.
-
-## The databases
-
-Each cluster gets its own PostgreSQL 17, reachable only from inside its network, and two
-identities: one the service runs as, one only the migration Job runs as.
-
-| Cluster | Database | How the pods get their identity | Service signs in with | Migration Job signs in as |
-| --- | --- | --- | --- | --- |
-| EKS | Amazon RDS in database subnets with no route to the internet | EKS Pod Identity | An RDS IAM token for `app_user` | The RDS administrator, with the password RDS keeps in Secrets Manager |
-| GKE | Cloud SQL with a private IP only, connections only through the Cloud SQL connectors | Workload Identity Federation for GKE | Its service account, through IAM database authentication | A migration service account with `cloudsqlsuperuser` |
-| AKS | Azure Database for PostgreSQL flexible server in a delegated subnet, password sign-in off | Microsoft Entra Workload ID | Its managed identity's Entra token | A managed identity that is the server's Entra administrator |
-
-The shared OpenTofu for each lives in [`infra/modules`](../infra/modules). In `prod`, RDS
-runs Multi-AZ, Cloud SQL is regional and the flexible server is zone-redundant, all with 14
-days of backups and deletion protection.
 
 ## Configuration
 
