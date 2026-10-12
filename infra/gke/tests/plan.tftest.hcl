@@ -76,4 +76,31 @@ run "dev" {
     )
     error_message = "The chart values must carry both service accounts and the database's private range."
   }
+  assert {
+    condition = (
+      length(google_monitoring_alert_policy.node_cpu.notification_channels) == 0 &&
+      length(google_monitoring_alert_policy.container_restarts.notification_channels) == 0
+    )
+    error_message = "Without alert_email, the cluster's alerts must notify no one."
+  }
+  assert {
+    condition     = jsondecode(google_monitoring_dashboard.app.dashboard_json).displayName == "multi-cloud-dev"
+    error_message = "The dashboard must summarize the cluster and the database."
+  }
+}
+
+run "alerts" {
+  command = plan
+
+  variables {
+    alert_email = "ops@example.com"
+  }
+
+  assert {
+    condition = (
+      google_monitoring_notification_channel.email[0].labels.email_address == "ops@example.com" &&
+      contains(google_monitoring_alert_policy.node_cpu.notification_channels, google_monitoring_notification_channel.email[0].id)
+    )
+    error_message = "alert_email must notify the cluster's alerts through its own channel."
+  }
 }

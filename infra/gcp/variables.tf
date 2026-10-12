@@ -100,3 +100,9 @@ variable "labels" {
   default     = {}
   description = "Extra labels applied to every resource"
 }
+
+variable "alert_email" {
+  type        = string
+  default     = ""
+  description = "Email address for the database, error rate and latency alerts; empty leaves them unmonitored"
+}
