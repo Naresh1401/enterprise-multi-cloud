@@ -62,6 +62,11 @@ mock_provider "aws" {
       }]
     }
   }
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:us-east-1:111122223333:mock-database-alerts"
+    }
+  }
 }
 
 mock_provider "tls" {}
@@ -116,5 +121,34 @@ run "dev" {
       ["10.30.192.0/24", "10.30.193.0/24", "10.30.194.0/24"]
     )
     error_message = "The pods may only reach the database subnets on the database port."
+  }
+  assert {
+    condition = (
+      aws_eks_pod_identity_association.observability.namespace == "amazon-cloudwatch" &&
+      aws_eks_pod_identity_association.observability.service_account == "cloudwatch-agent" &&
+      aws_eks_addon.observability.addon_name == "amazon-cloudwatch-observability"
+    )
+    error_message = "Container Insights must come from the amazon-cloudwatch-observability add-on, authenticated through its own Pod Identity role."
+  }
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.node_cpu.namespace == "ContainerInsights" &&
+      aws_cloudwatch_metric_alarm.pod_restarts.metric_name == "pod_number_of_container_restarts" &&
+      length(aws_cloudwatch_metric_alarm.node_cpu.alarm_actions) == 0
+    )
+    error_message = "The cluster must have its own alarms, unnotified without alert_email."
+  }
+}
+
+run "alerts" {
+  command = plan
+
+  variables {
+    alert_email = "ops@example.com"
+  }
+
+  assert {
+    condition     = contains(aws_cloudwatch_metric_alarm.node_cpu.alarm_actions, module.database.alarm_topic_arn)
+    error_message = "With alert_email, the cluster alarms must notify the same topic as the database's."
   }
 }

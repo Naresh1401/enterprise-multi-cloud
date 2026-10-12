@@ -52,3 +52,15 @@ variable "labels" {
   default     = {}
   description = "Labels for the instance"
 }
+
+variable "notification_channels" {
+  type        = list(string)
+  default     = []
+  description = "Cloud Monitoring notification channel IDs for the CPU, disk and connection alerts; empty leaves them unmonitored"
+}
+
+variable "connection_alarm_threshold" {
+  type        = number
+  default     = 80
+  description = "Open connections sustained for 15 minutes that triggers the connections alert"
+}

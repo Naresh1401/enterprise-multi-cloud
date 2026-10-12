@@ -71,3 +71,21 @@ variable "app_role" {
   default     = "app_user"
   description = "PostgreSQL role the service signs in as with IAM; the migration job creates it"
 }
+
+variable "alert_email" {
+  type        = string
+  default     = ""
+  description = "Email address for CPU, storage, connection and (prod) failover alarms; empty leaves them unmonitored"
+}
+
+variable "cpu_alarm_threshold" {
+  type        = number
+  default     = 80
+  description = "CPU percent sustained for 15 minutes that triggers the CPU alarm"
+}
+
+variable "connection_alarm_threshold" {
+  type        = number
+  default     = 80
+  description = "Open connections sustained for 15 minutes that triggers the connections alarm"
+}

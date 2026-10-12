@@ -72,6 +72,31 @@ run "dev" {
     ])
     error_message = "TLS must be required, and connections, disconnections and checkpoints logged."
   }
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.cpu.criteria[0].metric_name == "cpu_percent" &&
+      azurerm_monitor_metric_alert.storage.criteria[0].metric_name == "storage_percent" &&
+      azurerm_monitor_metric_alert.connections.criteria[0].metric_name == "active_connections" &&
+      length(azurerm_monitor_metric_alert.cpu.action) == 0
+    )
+    error_message = "The server must have its own alerts, unnotified without action_group_id."
+  }
+}
+
+run "with_alerts" {
+  command = plan
+
+  variables {
+    action_group_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.Insights/actionGroups/mock"
+  }
+
+  assert {
+    condition = alltrue([
+      for alert in [azurerm_monitor_metric_alert.cpu, azurerm_monitor_metric_alert.storage, azurerm_monitor_metric_alert.connections] :
+      one(alert.action).action_group_id == var.action_group_id
+    ])
+    error_message = "action_group_id must reach every alert."
+  }
 }
 
 run "prod" {

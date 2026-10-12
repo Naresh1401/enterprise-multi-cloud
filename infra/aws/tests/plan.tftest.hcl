@@ -36,6 +36,11 @@ mock_provider "aws" {
       arn = "arn:aws:iam::111122223333:role/mock"
     }
   }
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:us-east-1:111122223333:mock-database-alerts"
+    }
+  }
   mock_resource "aws_db_instance" {
     defaults = {
       master_user_secret = [{
@@ -154,6 +159,19 @@ run "dev" {
     condition     = aws_ecs_cluster.app.setting == toset([{ name = "containerInsights", value = "enabled" }])
     error_message = "Container Insights must be on."
   }
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.ecs_cpu.dimensions["ServiceName"] == aws_ecs_service.app.name &&
+      aws_cloudwatch_metric_alarm.alb_5xx.namespace == "AWS/ApplicationELB" &&
+      aws_cloudwatch_metric_alarm.alb_unhealthy_hosts.metric_name == "UnHealthyHostCount" &&
+      length(aws_cloudwatch_metric_alarm.ecs_cpu.alarm_actions) == 0
+    )
+    error_message = "The service and load balancer must each have their own alarms, unnotified without alert_email."
+  }
+  assert {
+    condition     = jsondecode(aws_cloudwatch_dashboard.app.dashboard_body).widgets[0].properties.title == "ECS service"
+    error_message = "The dashboard must summarize the service, load balancer and database."
+  }
 }
 
 run "https" {
@@ -191,5 +209,21 @@ run "prod" {
   assert {
     condition     = !aws_ecr_repository.app.force_delete
     error_message = "prod's repository must keep its images."
+  }
+}
+
+run "alerts" {
+  command = plan
+
+  variables {
+    alert_email = "ops@example.com"
+  }
+
+  assert {
+    condition = (
+      contains(aws_cloudwatch_metric_alarm.ecs_cpu.alarm_actions, module.database.alarm_topic_arn) &&
+      contains(aws_cloudwatch_metric_alarm.alb_5xx.alarm_actions, module.database.alarm_topic_arn)
+    )
+    error_message = "With alert_email, the ECS and load balancer alarms must notify the same topic as the database's."
   }
 }

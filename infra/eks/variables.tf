@@ -62,3 +62,9 @@ variable "release_name" {
   default     = "multi-cloud-app"
   description = "Helm release name; the chart names its service accounts after it"
 }
+
+variable "alert_email" {
+  type        = string
+  default     = ""
+  description = "Email address for database and cluster alarms; empty leaves them unmonitored"
+}

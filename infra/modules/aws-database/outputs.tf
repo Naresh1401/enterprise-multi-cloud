@@ -42,3 +42,8 @@ output "admin_secret_policy_json" {
   value       = data.aws_iam_policy_document.admin_secret.json
   description = "IAM policy that lets the migration job read the administrator password"
 }
+
+output "alarm_topic_arn" {
+  value       = var.alert_email != "" ? aws_sns_topic.alerts[0].arn : null
+  description = "SNS topic the database alarms notify; null when alert_email is empty"
+}

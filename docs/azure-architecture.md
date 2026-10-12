@@ -25,7 +25,7 @@ in the [Azure deployment guide](azure-deployment.md), the chart in
 - [Container Apps](#container-apps)
   - [Request path](#aca-request-path) · [Network](#aca-network) · [Compute](#aca-compute) · [Registry](#aca-registry) · [Database](#aca-database) · [Identity and access](#aca-identity-and-access) · [Logs and metrics](#aca-logs-and-metrics) · [Every resource](#aca-every-resource) · [Deployment flow](#aca-deployment-flow) · [Verify a deployment](#aca-verify-a-deployment)
 - [AKS](#aks)
-  - [Request path](#aks-request-path) · [Network](#aks-network) · [Cluster](#aks-cluster) · [Workload identities](#aks-workload-identities) · [Database](#aks-database) · [Every resource](#aks-every-resource) · [Deployment flow](#aks-deployment-flow) · [Verify a deployment](#aks-verify-a-deployment)
+  - [Request path](#aks-request-path) · [Network](#aks-network) · [Cluster](#aks-cluster) · [Workload identities](#aks-workload-identities) · [Database](#aks-database) · [Logs and metrics](#aks-logs-and-metrics) · [Every resource](#aks-every-resource) · [Deployment flow](#aks-deployment-flow) · [Verify a deployment](#aks-verify-a-deployment)
 - [Check it without an Azure subscription](#check-it-without-an-azure-subscription)
 - [Not included](#not-included)
 
@@ -170,6 +170,13 @@ The tenant comes from `data.azurerm_client_config.current`.
 | Requests, replicas, CPU and memory | Azure Monitor metrics of the Container App | Azure Monitor's defaults |
 | PostgreSQL logs | The server's logs in the portal (no diagnostic setting sends them elsewhere) | Azure's defaults |
 
+`azurerm_monitor_metric_alert.restarts` (more than 5 restarts in 15 minutes) and `.error_rate`
+(more than 10 server errors in 5 minutes, filtered to `statusCodeCategory` `5XX`) watch the
+Container App's own metrics, alongside the database's own
+`module.database.azurerm_monitor_metric_alert.cpu`, `.storage` and `.connections`. `alert_email`
+creates `azurerm_monitor_action_group.alerts` every alert here and the database's notify through;
+empty leaves them visible in Azure Monitor only.
+
 <a id="aca-every-resource"></a>
 
 ### Every resource
@@ -199,8 +206,14 @@ What one `tofu apply` in `infra/azure` creates, as `scripts/inventory.sh azure` 
 | `module.database.azurerm_postgresql_flexible_server_configuration.settings["log_disconnections"]` | Log disconnections |
 | `module.database.azurerm_postgresql_flexible_server_configuration.settings["log_checkpoints"]` | Log checkpoints |
 | `module.database.azurerm_postgresql_flexible_server_configuration.settings["connection_throttle.enable"]` | Slow down repeated failed sign-ins |
+| `module.database.azurerm_monitor_metric_alert.cpu` | Database CPU above 80% for 15 minutes |
+| `module.database.azurerm_monitor_metric_alert.storage` | Database storage above 90% full for 15 minutes |
+| `module.database.azurerm_monitor_metric_alert.connections` | More than 80 active connections for 15 minutes |
 | `azurerm_container_app_job.migrate` | The migration job |
 | `azurerm_container_app.app` | The Container App |
+| `azurerm_monitor_action_group.alerts` | Where the alerts notify, with `alert_email` set |
+| `azurerm_monitor_metric_alert.restarts` | More than 5 restarts in 15 minutes |
+| `azurerm_monitor_metric_alert.error_rate` | More than 10 server errors in 5 minutes |
 
 <a id="aca-deployment-flow"></a>
 
@@ -354,6 +367,9 @@ flowchart TB
   chart's network policies; Standard load balancer.
 - **API server**: public, because GitHub-hosted runners have no fixed address; set
   `api_allowed_cidrs` to allow only some addresses.
+- **Container Insights**: the `oms_agent` add-on sends node and pod metrics and logs to its own
+  Log Analytics workspace, `azurerm_log_analytics_workspace.logs` (`log_analytics_workspace_name`),
+  separate from Container Apps'.
 
 The registry `azurerm_container_registry.this` is `AKS_ACR_NAME`, Standard SKU, admin account off.
 The chart's objects in the cluster are in [kubernetes-architecture.md](kubernetes-architecture.md).
@@ -381,6 +397,20 @@ The same module and settings as [Container Apps' database](#aca-database), named
 identity `multi-cloud-dev-migrate` and creates `app_user` for `multi-cloud-dev-app`'s object ID.
 The tenant comes from `data.azurerm_client_config.current`.
 
+<a id="aks-logs-and-metrics"></a>
+
+### Logs and metrics
+
+The control plane's own logs (`kube-apiserver`, `kube-audit`, `kube-controller-manager`,
+`kube-scheduler`, `cluster-autoscaler`, `guard`) go to the same workspace as Container Insights
+through `azurerm_monitor_diagnostic_setting.aks`. `azurerm_monitor_metric_alert.node_cpu` (node
+CPU above 80% for 15 minutes) and `.node_memory` (node memory above 80% for 15 minutes) watch
+platform metrics that need no agent, alongside the database's own
+`module.database.azurerm_monitor_metric_alert.cpu`, `.storage` and `.connections`. `alert_email`
+creates `azurerm_monitor_action_group.alerts` every alert here and the database's notify through,
+the same pattern as [Container Apps'](#aca-logs-and-metrics); empty leaves them visible in Azure
+Monitor only.
+
 <a id="aks-every-resource"></a>
 
 ### Every resource
@@ -396,13 +426,18 @@ after creating the cluster):
 | `azurerm_subnet.nodes` | Node subnet |
 | `azurerm_subnet.database` | Server subnet |
 | `azurerm_container_registry.this` | Image registry |
+| `azurerm_log_analytics_workspace.logs` | Container Insights and the control plane's logs, 30 days |
 | `azurerm_kubernetes_cluster.this` | The AKS cluster |
+| `azurerm_monitor_diagnostic_setting.aks` | Sends the control plane's logs to the workspace |
 | `azurerm_role_assignment.cluster_network` | The cluster may join nodes to its subnet |
 | `azurerm_role_assignment.acr_pull` | The nodes may pull images |
 | `azurerm_user_assigned_identity.app` | The service's identity |
 | `azurerm_user_assigned_identity.migration` | The migration Job's identity |
 | `azurerm_federated_identity_credential.workload["multi-cloud-app"]` | Trusts the service's service account |
 | `azurerm_federated_identity_credential.workload["multi-cloud-app-migrate"]` | Trusts the Job's service account |
+| `azurerm_monitor_action_group.alerts` | Where the alerts notify, with `alert_email` set |
+| `azurerm_monitor_metric_alert.node_cpu` | Node CPU above 80% for 15 minutes |
+| `azurerm_monitor_metric_alert.node_memory` | Node memory above 80% for 15 minutes |
 | `module.database.azurerm_private_dns_zone.this` | Private DNS zone for the server |
 | `module.database.azurerm_private_dns_zone_virtual_network_link.this` | Links it to the network |
 | `module.database.azurerm_postgresql_flexible_server.this` | The PostgreSQL server |
@@ -413,6 +448,9 @@ after creating the cluster):
 | `module.database.azurerm_postgresql_flexible_server_configuration.settings["log_disconnections"]` | Log disconnections |
 | `module.database.azurerm_postgresql_flexible_server_configuration.settings["log_checkpoints"]` | Log checkpoints |
 | `module.database.azurerm_postgresql_flexible_server_configuration.settings["connection_throttle.enable"]` | Slow down repeated failed sign-ins |
+| `module.database.azurerm_monitor_metric_alert.cpu` | Database CPU above 80% for 15 minutes |
+| `module.database.azurerm_monitor_metric_alert.storage` | Database storage above 90% full for 15 minutes |
+| `module.database.azurerm_monitor_metric_alert.connections` | More than 80 active connections for 15 minutes |
 
 <a id="aks-deployment-flow"></a>
 
@@ -501,8 +539,8 @@ sign-in, TLS being required, and the `dev` and `prod` differences. See
 - **HTTPS on AKS:** the load balancer serves HTTP; an ingress controller or Application Gateway
   with a certificate and a domain would add TLS. (The Container Apps URL is HTTPS already.)
 - **Azure Front Door or Application Gateway with a web application firewall.**
-- **Container Insights for AKS** (`az aks enable-addons --addons monitoring`) and diagnostic
-  settings that send the server's and the registry's logs to Log Analytics.
 - **Private registries** (Premium SKU with private endpoints) and **Microsoft Defender for Cloud**.
-- **Geo-redundant backups** of the server, and **alerts and budgets** in Azure Monitor.
+- **Geo-redundant backups** of the server, and **budgets** in Azure Monitor (`alert_email` wires
+  the CPU, storage, connections, restart, error rate and AKS node CPU/memory alerts, with
+  Container Insights and the control plane's logs now in Log Analytics).
 - **A private AKS API server**, which needs self-hosted runners inside the network.

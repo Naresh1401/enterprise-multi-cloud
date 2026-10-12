@@ -31,6 +31,11 @@ mock_provider "aws" {
       }]
     }
   }
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:us-east-1:111122223333:mock-database-alerts"
+    }
+  }
 }
 
 variables {
@@ -123,6 +128,51 @@ run "dev" {
     condition     = output.admin_secret_arn == "arn:aws:secretsmanager:us-east-1:111122223333:secret:rds!db-mock"
     error_message = "The module must output the secret RDS keeps the administrator password in."
   }
+  assert {
+    condition     = length(aws_sns_topic.alerts) == 0 && output.alarm_topic_arn == null
+    error_message = "Without alert_email, no SNS topic must exist and the alarms must have no actions."
+  }
+  assert {
+    condition = (
+      length(aws_cloudwatch_metric_alarm.cpu.alarm_actions) == 0 &&
+      length(aws_cloudwatch_metric_alarm.storage.alarm_actions) == 0 &&
+      length(aws_cloudwatch_metric_alarm.connections.alarm_actions) == 0
+    )
+    error_message = "Without alert_email, the alarms must have no actions."
+  }
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.cpu.namespace == "AWS/RDS" && aws_cloudwatch_metric_alarm.cpu.metric_name == "CPUUtilization" &&
+      aws_cloudwatch_metric_alarm.storage.metric_name == "FreeStorageSpace" &&
+      aws_cloudwatch_metric_alarm.connections.metric_name == "DatabaseConnections"
+    )
+    error_message = "CPU, storage and connections must each have their own RDS alarm."
+  }
+}
+
+run "with_alerts" {
+  command = plan
+
+  variables {
+    alert_email = "ops@example.com"
+  }
+
+  assert {
+    condition = (
+      length(aws_sns_topic.alerts) == 1 &&
+      aws_sns_topic_subscription.alerts_email[0].protocol == "email" &&
+      aws_sns_topic_subscription.alerts_email[0].endpoint == "ops@example.com"
+    )
+    error_message = "alert_email must create an SNS topic with an email subscription."
+  }
+  assert {
+    condition     = contains(aws_cloudwatch_metric_alarm.cpu.alarm_actions, aws_sns_topic.alerts[0].arn)
+    error_message = "The alarms must notify the SNS topic when alert_email is set."
+  }
+  assert {
+    condition     = length(aws_db_event_subscription.failover) == 0
+    error_message = "dev has no standby, so it gets no failover subscription even with alert_email."
+  }
 }
 
 run "prod" {
@@ -131,11 +181,19 @@ run "prod" {
   variables {
     name        = "multi-cloud-prod"
     environment = "prod"
+    alert_email = "ops@example.com"
   }
 
   assert {
     condition     = aws_db_instance.this.multi_az && aws_db_instance.this.backup_retention_period == 14
     error_message = "prod must run Multi-AZ with 14 days of backups."
+  }
+  assert {
+    condition = (
+      length(aws_db_event_subscription.failover) == 1 &&
+      aws_db_event_subscription.failover[0].event_categories == toset(["failover"])
+    )
+    error_message = "prod with alert_email must subscribe to the database's failover events."
   }
   assert {
     condition = (

@@ -25,7 +25,7 @@ The one-time account setup (state bucket, GitHub OIDC role) is in the
 - [ECS Fargate](#ecs-fargate)
   - [Request path](#ecs-request-path) · [Network](#ecs-network) · [Security groups](#ecs-security-groups) · [Compute](#ecs-compute) · [Registry](#ecs-registry) · [Database](#ecs-database) · [Identity and access](#ecs-identity-and-access) · [Logs and metrics](#ecs-logs-and-metrics) · [Every resource](#ecs-every-resource) · [Deployment flow](#ecs-deployment-flow) · [Verify a deployment](#ecs-verify-a-deployment)
 - [EKS Auto Mode](#eks-auto-mode)
-  - [Request path](#eks-request-path) · [Network](#eks-network) · [Cluster](#eks-cluster) · [Pod identities](#eks-pod-identities) · [Database](#eks-database) · [Every resource](#eks-every-resource) · [Deployment flow](#eks-deployment-flow) · [Verify a deployment](#eks-verify-a-deployment)
+  - [Request path](#eks-request-path) · [Network](#eks-network) · [Cluster](#eks-cluster) · [Pod identities](#eks-pod-identities) · [Database](#eks-database) · [Logs and metrics](#eks-logs-and-metrics) · [Every resource](#eks-every-resource) · [Deployment flow](#eks-deployment-flow) · [Verify a deployment](#eks-verify-a-deployment)
 - [Check it without an AWS account](#check-it-without-an-aws-account)
 - [Not included](#not-included)
 
@@ -206,6 +206,16 @@ Secrets Manager.
 | Query performance | RDS Performance Insights | 7 days |
 | Network flows | CloudWatch Logs `/aws/vpc-flow-log/<vpc-id>` | 30 days |
 
+Alarms (`aws_cloudwatch_metric_alarm.ecs_cpu`, `.ecs_memory`, `.alb_5xx`, `.alb_latency`,
+`.alb_unhealthy_hosts`, and the database's own `module.database.aws_cloudwatch_metric_alarm.cpu`,
+`.storage`, `.connections`) watch the task and load balancer metrics above. `aws_cloudwatch_dashboard.app`
+puts the service, load balancer and database side by side in one CloudWatch dashboard. `ALERT_EMAIL`
+(the `alert_email` variable), when set, creates `module.database.aws_sns_topic.alerts` and an email
+subscription (`aws_sns_topic_subscription.alerts_email`) every alarm here notifies; `prod` also
+subscribes it to the database's failover events (`module.database.aws_db_event_subscription.failover`).
+Empty leaves every alarm visible in the console with no one notified. `make inventory` doesn't plan
+these (they have no OpenTofu test), but `tofu plan` shows them like anything else.
+
 <a id="ecs-every-resource"></a>
 
 ### Every resource
@@ -262,11 +272,23 @@ zone; with a certificate, the HTTPS listener and its ingress rule are added.
 | `aws_lb_listener.http` | Port 80 |
 | `aws_lb_listener.https` | Port 443, with a certificate |
 | `aws_ecs_service.app` | Runs and replaces the tasks |
+| `aws_cloudwatch_metric_alarm.ecs_cpu` | Task CPU above 80% for 15 minutes |
+| `aws_cloudwatch_metric_alarm.ecs_memory` | Task memory above 80% for 15 minutes |
+| `aws_cloudwatch_metric_alarm.alb_5xx` | More than 10 server errors in 5 minutes |
+| `aws_cloudwatch_metric_alarm.alb_latency` | p99 target response time above 1s for 15 minutes |
+| `aws_cloudwatch_metric_alarm.alb_unhealthy_hosts` | Any unhealthy task behind the load balancer |
+| `aws_cloudwatch_dashboard.app` | Service, load balancer and database metrics together |
 | `module.database.aws_db_subnet_group.this` | Database subnets for RDS |
 | `module.database.aws_security_group.this` | Database group |
 | `module.database.aws_vpc_security_group_ingress_rule.from_security_groups[0]` | 5432 from the tasks |
 | `module.database.aws_db_parameter_group.this` | TLS-only and connection logging |
 | `module.database.aws_db_instance.this` | The PostgreSQL instance |
+| `module.database.aws_cloudwatch_metric_alarm.cpu` | Database CPU above 80% for 15 minutes |
+| `module.database.aws_cloudwatch_metric_alarm.storage` | Database free storage below 10% |
+| `module.database.aws_cloudwatch_metric_alarm.connections` | More than 80 open connections for 15 minutes |
+| `module.database.aws_sns_topic.alerts` | Where the alarms notify, with `alert_email` set |
+| `module.database.aws_sns_topic_subscription.alerts_email` | The email subscription on it |
+| `module.database.aws_db_event_subscription.failover` | `prod` with `alert_email` set: notifies on a Multi-AZ failover |
 
 Data sources it reads: `data.aws_availability_zones.available` (the first two zones),
 `data.aws_iam_policy_document.ecs_tasks_assume`, and in the module `data.aws_partition.current`,
@@ -474,6 +496,26 @@ than a security group of their own. The migration Job reads the administrator's 
 Secrets Manager itself (`DB_PASSWORD_SECRET_ARN`) with its Pod Identity role; OpenTofu passes the
 address, the secret's ARN and the subnets to the chart through the `helm_values` output.
 
+<a id="eks-logs-and-metrics"></a>
+
+### Logs and metrics
+
+Unlike ECS, EKS publishes nothing to CloudWatch on its own beyond the control plane logs
+(`module.eks.aws_cloudwatch_log_group.this[0]`). Pod and node metrics need the
+`amazon-cloudwatch-observability` add-on (`aws_eks_addon.observability`), which runs as the
+`cloudwatch-agent` service account in the `amazon-cloudwatch` namespace, authenticated through
+its own Pod Identity role (`aws_iam_role.observability`, `aws_iam_role_policy_attachment.observability`:
+`CloudWatchAgentServerPolicy`, `aws_eks_pod_identity_association.observability`) rather than a
+hand-installed agent or static credentials.
+
+Once it's running, its metrics land in the `ContainerInsights` namespace, where
+`aws_cloudwatch_metric_alarm.node_cpu` (node CPU above 80% for 15 minutes) and `.pod_restarts`
+(more than 5 container restarts in 15 minutes) watch them, alongside the database's own
+`module.database.aws_cloudwatch_metric_alarm.cpu`, `.storage` and `.connections`.
+`aws_cloudwatch_dashboard.app` puts the cluster and database metrics side by side. `alert_email`
+wires every alarm here to the same SNS topic as [ECS's](#ecs-logs-and-metrics)
+(`module.database.aws_sns_topic.alerts`); empty leaves them visible in the console only.
+
 <a id="eks-every-resource"></a>
 
 ### Every resource
@@ -534,11 +576,24 @@ What one `tofu apply` in `infra/eks` creates for `dev`, as `scripts/inventory.sh
 | `aws_iam_role.migration` | The migration Job's Pod Identity role |
 | `aws_iam_role_policy.migration_secret` | Read the administrator's secret |
 | `aws_eks_pod_identity_association.migration` | Ties it to the Job's service account |
+| `aws_iam_role.observability` | The CloudWatch agent's Pod Identity role |
+| `aws_iam_role_policy_attachment.observability` | `CloudWatchAgentServerPolicy` |
+| `aws_eks_pod_identity_association.observability` | Ties it to `amazon-cloudwatch/cloudwatch-agent` |
+| `aws_eks_addon.observability` | The `amazon-cloudwatch-observability` add-on: Container Insights |
+| `aws_cloudwatch_metric_alarm.node_cpu` | Node CPU above 80% for 15 minutes |
+| `aws_cloudwatch_metric_alarm.pod_restarts` | More than 5 container restarts in 15 minutes |
+| `aws_cloudwatch_dashboard.app` | Cluster and database metrics together |
 | `module.database.aws_db_subnet_group.this` | Database subnets for RDS |
 | `module.database.aws_security_group.this` | Database group |
 | `module.database.aws_vpc_security_group_ingress_rule.from_cidrs[0..2]` | 5432 from the private subnets |
 | `module.database.aws_db_parameter_group.this` | TLS-only and connection logging |
 | `module.database.aws_db_instance.this` | The PostgreSQL instance |
+| `module.database.aws_cloudwatch_metric_alarm.cpu` | Database CPU above 80% for 15 minutes |
+| `module.database.aws_cloudwatch_metric_alarm.storage` | Database free storage below 10% |
+| `module.database.aws_cloudwatch_metric_alarm.connections` | More than 80 open connections for 15 minutes |
+| `module.database.aws_sns_topic.alerts` | Where the alarms notify, with `alert_email` set |
+| `module.database.aws_sns_topic_subscription.alerts_email` | The email subscription on it |
+| `module.database.aws_db_event_subscription.failover` | `prod` with `alert_email` set: notifies on a Multi-AZ failover |
 
 Data sources it reads: `data.aws_availability_zones.available` (the first three zones),
 `data.aws_iam_policy_document.pod_identity_assume`, and the database module's
@@ -643,7 +698,9 @@ Deliberately left out, and what adding each would take:
 - **Autoscaling on ECS:** the service runs a fixed `desired_count`; Application Auto Scaling
   would scale it on CPU or requests. (On EKS the chart's HorizontalPodAutoscaler scales pods, and
   Auto Mode scales nodes.)
-- **Alarms, dashboards and budgets:** metrics and logs are collected, but nothing alerts on them.
+- **Alarms, dashboards and budgets:** CPU, storage, connections, failover, service and load
+  balancer alarms exist (`alert_email` wires them to SNS), and a dashboard puts them together;
+  cost budgets don't.
 - **Customer-managed keys** for ECR, CloudWatch Logs and Performance Insights (AWS-managed keys
   encrypt them now; EKS secrets already use a customer-managed key).
 - **Cross-region backups or replicas** of the database.

@@ -25,7 +25,7 @@ for GitHub) is in the [GCP deployment guide](gcp-deployment.md), the chart in
 - [Cloud Run](#cloud-run)
   - [Request path](#cloud-run-request-path) · [Network](#cloud-run-network) · [Compute](#cloud-run-compute) · [Registry](#cloud-run-registry) · [Database](#cloud-run-database) · [Identity and access](#cloud-run-identity-and-access) · [Logs and metrics](#cloud-run-logs-and-metrics) · [Every resource](#cloud-run-every-resource) · [Deployment flow](#cloud-run-deployment-flow) · [Verify a deployment](#cloud-run-verify-a-deployment)
 - [GKE Autopilot](#gke-autopilot)
-  - [Request path](#gke-request-path) · [Network](#gke-network) · [Cluster](#gke-cluster) · [Workload identities](#gke-workload-identities) · [Database](#gke-database) · [Every resource](#gke-every-resource) · [Deployment flow](#gke-deployment-flow) · [Verify a deployment](#gke-verify-a-deployment)
+  - [Request path](#gke-request-path) · [Network](#gke-network) · [Cluster](#gke-cluster) · [Workload identities](#gke-workload-identities) · [Database](#gke-database) · [Logs and metrics](#gke-logs-and-metrics) · [Every resource](#gke-every-resource) · [Deployment flow](#gke-deployment-flow) · [Verify a deployment](#gke-verify-a-deployment)
 - [Check it without a Google Cloud project](#check-it-without-a-google-cloud-project)
 - [Not included](#not-included)
 
@@ -172,6 +172,13 @@ so they don't reach any other Cloud SQL instance in the project.
 | PostgreSQL logs and query statistics | Cloud Logging (`cloudsql_database`) and Query Insights |
 | Network flows | VPC flow logs of `multi-cloud-app-dev-run`, in Cloud Logging |
 
+`google_monitoring_alert_policy.error_rate` (more than 10 server errors in 5 minutes) and
+`.latency` (p99 above 1s for 15 minutes) watch the Cloud Run metrics above, alongside the
+database's own `module.database.google_monitoring_alert_policy.cpu`, `.disk` and `.connections`.
+`google_monitoring_dashboard.app` puts the service and database side by side in one Cloud
+Monitoring dashboard. `alert_email`, when set, creates `google_monitoring_notification_channel.email`
+every alert here and the database's share; empty leaves them visible in Cloud Monitoring only.
+
 <a id="cloud-run-every-resource"></a>
 
 ### Every resource
@@ -195,9 +202,16 @@ What one `tofu apply` in `infra/gcp` creates, as `scripts/inventory.sh gcp` list
 | `module.database.google_project_iam_member.database_access["app-login"]` | Service: sign in with IAM |
 | `module.database.google_project_iam_member.database_access["migration-client"]` | Job: connect through a connector |
 | `module.database.google_project_iam_member.database_access["migration-login"]` | Job: sign in with IAM |
+| `module.database.google_monitoring_alert_policy.cpu` | Database CPU above 80% for 15 minutes |
+| `module.database.google_monitoring_alert_policy.disk` | Database disk above 80% full for 15 minutes |
+| `module.database.google_monitoring_alert_policy.connections` | More than 80 connections for 15 minutes |
 | `google_cloud_run_v2_job.migrate` | The migration job |
 | `google_cloud_run_v2_service.app` | The service |
 | `google_cloud_run_v2_service_iam_member.public_access` | Public invoker |
+| `google_monitoring_notification_channel.email` | Where the alerts notify, with `alert_email` set |
+| `google_monitoring_alert_policy.error_rate` | More than 10 server errors in 5 minutes |
+| `google_monitoring_alert_policy.latency` | p99 request latency above 1s for 15 minutes |
+| `google_monitoring_dashboard.app` | Service and database metrics together |
 
 <a id="cloud-run-deployment-flow"></a>
 
@@ -373,6 +387,19 @@ The same module and settings as [Cloud Run's database](#cloud-run-database), nam
 which the chart's network policy allows only to the private services range, and reach the Cloud
 SQL Admin API on 443.
 
+<a id="gke-logs-and-metrics"></a>
+
+### Logs and metrics
+
+GKE Autopilot sends node and container metrics to Cloud Monitoring on its own, no agent needed.
+`google_monitoring_alert_policy.node_cpu` (allocatable CPU above 80% for 15 minutes) and
+`.container_restarts` (more than 5 restarts in 15 minutes) watch them, alongside the database's
+own `module.database.google_monitoring_alert_policy.cpu`, `.disk` and `.connections`.
+`google_monitoring_dashboard.app` puts the cluster and database side by side. `alert_email`
+wires every alert here to the same channel as [Cloud Run's](#cloud-run-logs-and-metrics)
+(`google_monitoring_notification_channel.email`); empty leaves them visible in Cloud Monitoring
+only.
+
 <a id="gke-every-resource"></a>
 
 ### Every resource
@@ -390,6 +417,10 @@ What one `tofu apply` in `infra/gke` creates, as `scripts/inventory.sh gke` list
 | `google_artifact_registry_repository_iam_member.nodes_pull` | Nodes may read images |
 | `google_service_account_iam_member.workload_identity["multi-cloud-app"]` | The service's pods act as its service account |
 | `google_service_account_iam_member.workload_identity["multi-cloud-app-migrate"]` | The Job's pods act as the migration service account |
+| `google_monitoring_notification_channel.email` | Where the alerts notify, with `alert_email` set |
+| `google_monitoring_alert_policy.node_cpu` | Node allocatable CPU above 80% for 15 minutes |
+| `google_monitoring_alert_policy.container_restarts` | More than 5 container restarts in 15 minutes |
+| `google_monitoring_dashboard.app` | Cluster and database metrics together |
 | `module.database.google_compute_global_address.private_services` | The `/20` reserved for Cloud SQL |
 | `module.database.google_service_networking_connection.private_services` | Peering with Google's service network |
 | `module.database.google_sql_database_instance.this` | The PostgreSQL instance |
@@ -495,6 +526,7 @@ and [`infra/modules/gcp-database/tests`](../infra/modules/gcp-database/tests).
 - **Customer-managed encryption keys** for Cloud SQL, Artifact Registry and the cluster; Google
   encrypts them with its own keys now.
 - **VPC Service Controls** around the project's APIs, and **Binary Authorization** for images.
-- **Alerting policies and budgets** in Cloud Monitoring and Billing.
+- **Budgets** in Cloud Billing (`alert_email` wires the CPU, disk, connections, error rate,
+  latency, node CPU and container restart alerting policies, and a dashboard puts them together).
 - **Cross-region replicas** of the database.
 - **A private GKE API endpoint only**, which needs self-hosted runners inside the VPC.

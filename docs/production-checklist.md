@@ -47,7 +47,8 @@ Use this before treating a deployment as production.
 - [ ] Migrations add before they remove, so the previous version keeps working while the new
       one rolls out ([database.md](database.md#writing-a-migration))
 - [ ] `/api/items` sits behind authentication before it holds real data
-- [ ] Alerts exist for connections, CPU, storage and replication lag
+- [ ] `alert_email` is set on every deployment target so the connections, CPU, storage and
+      (`prod`) failover/restart alarms notify someone
 
 ## Delivery
 
@@ -57,8 +58,8 @@ Use this before treating a deployment as production.
 
 ## Operations
 
-- [ ] Alerts exist for error rate, latency and restarts
-      (CloudWatch, Cloud Monitoring and Azure Monitor)
+- [ ] `alert_email` is set (ECS/ALB 5xx and latency, Cloud Run 5xx and latency, Container Apps
+      restarts and 5xx, and node CPU/memory or pod restarts on each Kubernetes target)
 - [ ] Budgets and cost alerts are set for all three clouds
 - [ ] Registry clean-up policies keep a bounded number of images
 

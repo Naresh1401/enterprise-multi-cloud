@@ -178,10 +178,13 @@ scripts/                     Deployment checks, resource inventory, local pipeli
 - CI fails on fixable critical or high vulnerabilities and on IaC and Kubernetes misconfigurations.
 - On Kubernetes the pods run as non-root with a read-only root filesystem, no capabilities and a
   network policy that admits only the HTTP port.
+- Every target and database has its own CPU, storage, connection, restart or error rate alarms
+  and a dashboard; set `alert_email` to notify someone, or watch them unnotified by default.
 
 ## Costs
 
-Clusters, databases, NAT gateways and load balancers bill while they exist, even when idle. To remove a
+Clusters, databases, NAT gateways and load balancers bill while they exist, even when idle. The
+alarms and dashboards this adds are a few cents a month per target. To remove a
 target, run `tofu destroy` in its `infra/` folder with the same backend settings and variables the
 workflow uses. GKE clusters have deletion protection on by default; set `deletion_protection =
 false` and apply before destroying.

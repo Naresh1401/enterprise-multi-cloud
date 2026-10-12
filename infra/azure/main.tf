@@ -157,6 +157,7 @@ module "database" {
   admin_principal_name = azurerm_user_assigned_identity.migration.name
   sku_name             = var.database_sku
   tags                 = local.tags
+  action_group_id      = local.action_group_id
 }
 
 # Runs the migrations; the deploy workflow starts it and waits for it before it updates the app

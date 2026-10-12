@@ -109,6 +109,37 @@ run "dev" {
     )
     error_message = "Private services access must reserve a /20 for the instance's private IP."
   }
+  assert {
+    condition = (
+      length(google_monitoring_alert_policy.cpu.notification_channels) == 0 &&
+      length(google_monitoring_alert_policy.disk.notification_channels) == 0 &&
+      length(google_monitoring_alert_policy.connections.notification_channels) == 0
+    )
+    error_message = "Without notification_channels, the alert policies must notify no one."
+  }
+  assert {
+    condition = alltrue([
+      for policy in [google_monitoring_alert_policy.cpu, google_monitoring_alert_policy.disk, google_monitoring_alert_policy.connections] :
+      strcontains(policy.conditions[0].condition_threshold[0].filter, "resource.label.database_id = \"example-project:multi-cloud-dev\"")
+    ])
+    error_message = "Each alert must scope to this instance only."
+  }
+}
+
+run "with_alerts" {
+  command = plan
+
+  variables {
+    notification_channels = ["projects/example-project/notificationChannels/12345"]
+  }
+
+  assert {
+    condition = alltrue([
+      for policy in [google_monitoring_alert_policy.cpu, google_monitoring_alert_policy.disk, google_monitoring_alert_policy.connections] :
+      contains(policy.notification_channels, "projects/example-project/notificationChannels/12345")
+    ])
+    error_message = "notification_channels must reach every alert policy."
+  }
 }
 
 run "prod" {

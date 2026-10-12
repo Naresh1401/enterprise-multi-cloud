@@ -95,3 +95,9 @@ variable "database_sku" {
   default     = "B_Standard_B1ms"
   description = "PostgreSQL flexible server size; use a General Purpose SKU such as GP_Standard_D2ds_v5 for prod"
 }
+
+variable "alert_email" {
+  type        = string
+  default     = ""
+  description = "Email address for database, restart and error-rate alerts; empty leaves them unmonitored"
+}

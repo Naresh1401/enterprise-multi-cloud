@@ -4,14 +4,15 @@
 module "database" {
   source = "../modules/gcp-database"
 
-  name                = local.name
-  environment         = var.environment
-  project_id          = var.project_id
-  region              = var.region
-  network_id          = google_compute_network.this.id
-  tier                = var.database_tier
-  deletion_protection = var.deletion_protection
-  labels              = local.labels
+  name                  = local.name
+  environment           = var.environment
+  project_id            = var.project_id
+  region                = var.region
+  network_id            = google_compute_network.this.id
+  tier                  = var.database_tier
+  deletion_protection   = var.deletion_protection
+  labels                = local.labels
+  notification_channels = local.notification_channels
 }
 
 resource "google_service_account_iam_member" "workload_identity" {

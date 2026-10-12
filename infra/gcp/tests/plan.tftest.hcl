@@ -106,6 +106,33 @@ run "dev" {
     condition     = google_compute_subnetwork.run.private_ip_google_access && google_compute_subnetwork.run.ip_cidr_range == "10.50.0.0/24"
     error_message = "The egress subnet must be 10.50.0.0/24 with Private Google Access."
   }
+  assert {
+    condition = (
+      length(google_monitoring_alert_policy.error_rate.notification_channels) == 0 &&
+      length(google_monitoring_alert_policy.latency.notification_channels) == 0
+    )
+    error_message = "Without alert_email, the service's alerts must notify no one."
+  }
+  assert {
+    condition     = jsondecode(google_monitoring_dashboard.app.dashboard_json).displayName == "multi-cloud-app-dev"
+    error_message = "The dashboard must summarize the service and the database."
+  }
+}
+
+run "alerts" {
+  command = plan
+
+  variables {
+    alert_email = "ops@example.com"
+  }
+
+  assert {
+    condition = (
+      google_monitoring_notification_channel.email[0].labels.email_address == "ops@example.com" &&
+      contains(google_monitoring_alert_policy.error_rate.notification_channels, google_monitoring_notification_channel.email[0].id)
+    )
+    error_message = "alert_email must notify the service's alerts through its own channel."
+  }
 }
 
 run "no_token" {
