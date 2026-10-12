@@ -106,3 +106,9 @@ variable "alert_email" {
   default     = ""
   description = "Email address for the database, error rate and latency alerts; empty leaves them unmonitored"
 }
+
+variable "enable_customer_managed_key" {
+  type        = bool
+  default     = false
+  description = "Encrypt the image repository and database with a customer-managed Cloud KMS key instead of Google's own. Set before the first apply: enabling it later replaces the repository and the instance"
+}
