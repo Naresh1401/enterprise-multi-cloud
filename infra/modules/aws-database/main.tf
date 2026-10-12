@@ -32,23 +32,25 @@ resource "aws_security_group" "this" {
   vpc_id      = var.vpc_id
 }
 
+# count, not for_each: the security group IDs only exist after the first apply, and count
+# needs just the list's length
 resource "aws_vpc_security_group_ingress_rule" "from_security_groups" {
-  for_each = toset(var.client_security_group_ids)
+  count = length(var.client_security_group_ids)
 
   security_group_id            = aws_security_group.this.id
   description                  = "PostgreSQL from the workloads"
-  referenced_security_group_id = each.value
+  referenced_security_group_id = var.client_security_group_ids[count.index]
   from_port                    = 5432
   to_port                      = 5432
   ip_protocol                  = "tcp"
 }
 
 resource "aws_vpc_security_group_ingress_rule" "from_cidrs" {
-  for_each = toset(var.client_cidr_blocks)
+  count = length(var.client_cidr_blocks)
 
   security_group_id = aws_security_group.this.id
   description       = "PostgreSQL from the workload subnets"
-  cidr_ipv4         = each.value
+  cidr_ipv4         = var.client_cidr_blocks[count.index]
   from_port         = 5432
   to_port           = 5432
   ip_protocol       = "tcp"

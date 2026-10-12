@@ -7,7 +7,7 @@ VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 # docker compose's PostgreSQL; the tests create and drop their own database on it
 TEST_DATABASE_ADMIN_URL ?= postgresql://postgres:local-only-password@127.0.0.1:5432/postgres
 
-.PHONY: install lint format db-up db-down test audit check run up docker-build docker-run tofu-check helm-check pipeline
+.PHONY: install lint format db-up db-down test audit check run up docker-build docker-run tofu-check helm-check inventory pipeline
 
 $(BIN)/activate: requirements.txt requirements-dev.txt
 	@$(PYTHON) -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else "Python 3.11+ is required: make PYTHON=python3.11 ...")'
@@ -63,7 +63,7 @@ CHART_VALUES := "" values-gke.yaml values-aks.yaml values-eks.yaml \
 tofu-check:
 	@for dir in $(INFRA); do \
 		echo "== infra/$$dir"; \
-		(cd infra/$$dir && tofu fmt -check && tofu init -backend=false -input=false >/dev/null && tofu validate) || exit 1; \
+		(cd infra/$$dir && tofu fmt -check -recursive && tofu init -backend=false -input=false >/dev/null && tofu validate && tofu test) || exit 1; \
 	done
 
 helm-check:
@@ -72,6 +72,10 @@ helm-check:
 		echo "== values.yaml $$values"; \
 		helm lint --strict $(CHART) $$args && helm template ci $(CHART) $$args >/dev/null || exit 1; \
 	done
+
+# Every resource each target would create, from plans against mock providers (no cloud account)
+inventory:
+	./scripts/inventory.sh
 
 pipeline:
 	./scripts/run_local_pipeline.sh

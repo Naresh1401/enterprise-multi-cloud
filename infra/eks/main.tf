@@ -49,9 +49,17 @@ module "vpc" {
   enable_nat_gateway = true
   single_nat_gateway = var.environment != "prod"
 
-  # Subnets for the database only, with no route to the internet
-  database_subnets             = [for i in range(3) : cidrsubnet(var.vpc_cidr, 8, 192 + i)]
-  create_database_subnet_group = false
+  # Subnets for the database only, with their own route table and no route to the internet
+  database_subnets                   = [for i in range(3) : cidrsubnet(var.vpc_cidr, 8, 192 + i)]
+  create_database_subnet_group       = false
+  create_database_subnet_route_table = true
+
+  # Every accepted and rejected connection in the VPC, kept 30 days in CloudWatch Logs
+  enable_flow_log                                 = true
+  create_flow_log_cloudwatch_log_group            = true
+  create_flow_log_cloudwatch_iam_role             = true
+  flow_log_cloudwatch_log_group_retention_in_days = 30
+  flow_log_max_aggregation_interval               = 60
 
   # EKS Auto Mode puts internet-facing load balancers in public subnets, internal ones in private
   public_subnet_tags  = { "kubernetes.io/role/elb" = 1 }
@@ -72,6 +80,15 @@ module "eks" {
 
   # The identity that runs OpenTofu (the deploy role) administers the cluster
   enable_cluster_creator_admin_permissions = true
+
+  # Pods get their AWS credentials from EKS Pod Identity, so no IAM OIDC provider (IRSA) is needed
+  enable_irsa = false
+
+  # The control plane and Auto Mode's nodes use the cluster security group EKS creates itself.
+  # The module's extra cluster and node groups only serve managed node groups, which this
+  # cluster doesn't have, so they would be empty or unused.
+  create_security_group      = false
+  create_node_security_group = false
 
   # Auto Mode: AWS runs the nodes, load balancing and storage
   compute_config = {

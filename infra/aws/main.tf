@@ -30,7 +30,9 @@ locals {
     managed-by  = "opentofu"
     service     = var.service_name
   })
-  https = var.certificate_arn != ""
+  https           = var.certificate_arn != ""
+  tmp_mount       = [{ sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }]
+  no_capabilities = { capabilities = { drop = ["ALL"] } }
   # Settings both containers share; the TLS certificate check uses the RDS roots in the image
   database_environment = [
     { name = "APP_ENV", value = var.environment },
@@ -57,9 +59,17 @@ module "vpc" {
   enable_nat_gateway = true
   single_nat_gateway = var.environment != "prod"
 
-  # Subnets for the database only, with no route to the internet
-  database_subnets             = [for i in range(2) : cidrsubnet(var.vpc_cidr, 8, 192 + i)]
-  create_database_subnet_group = false
+  # Subnets for the database only, with their own route table and no route to the internet
+  database_subnets                   = [for i in range(2) : cidrsubnet(var.vpc_cidr, 8, 192 + i)]
+  create_database_subnet_group       = false
+  create_database_subnet_route_table = true
+
+  # Every accepted and rejected connection in the VPC, kept 30 days in CloudWatch Logs
+  enable_flow_log                                 = true
+  create_flow_log_cloudwatch_log_group            = true
+  create_flow_log_cloudwatch_iam_role             = true
+  flow_log_cloudwatch_log_group_retention_in_days = 30
+  flow_log_max_aggregation_interval               = 60
 }
 
 # PostgreSQL that only the tasks can reach. The service signs in with IAM tokens; the
@@ -176,6 +186,11 @@ resource "aws_ecs_task_definition" "app" {
     cpu_architecture        = "X86_64"
   }
 
+  # The containers' root filesystems are read-only; /tmp is the one writable path, as on Kubernetes
+  volume {
+    name = "tmp"
+  }
+
   # Each task runs the migrations before its app container starts; the advisory lock and
   # Alembic's history make every run after the first a no-op
   container_definitions = jsonencode([
@@ -193,6 +208,9 @@ resource "aws_ecs_task_definition" "app" {
       secrets = [
         { name = "DB_PASSWORD", valueFrom = "${module.database.admin_secret_arn}:password::" },
       ]
+      readonlyRootFilesystem = true
+      mountPoints            = local.tmp_mount
+      linuxParameters        = local.no_capabilities
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -211,6 +229,9 @@ resource "aws_ecs_task_definition" "app" {
         containerPort = 8000
         protocol      = "tcp"
       }]
+      readonlyRootFilesystem = true
+      mountPoints            = local.tmp_mount
+      linuxParameters        = local.no_capabilities
       environment = concat(local.database_environment, [
         { name = "APP_VERSION", value = var.image_tag },
         { name = "DB_AUTH", value = "aws-iam" },
