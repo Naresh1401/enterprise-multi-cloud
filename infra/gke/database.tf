@@ -13,6 +13,7 @@ module "database" {
   deletion_protection   = var.deletion_protection
   labels                = local.labels
   notification_channels = local.notification_channels
+  kms_key_name          = local.kms_key_name
 }
 
 resource "google_service_account_iam_member" "workload_identity" {

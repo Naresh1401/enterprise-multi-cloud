@@ -87,6 +87,14 @@ resource "aws_db_instance" "this" {
   max_allocated_storage = var.max_allocated_storage
   storage_type          = "gp3"
   storage_encrypted     = true
+  # null below the per-GiB free baseline (3,000 IOPS; 125 MiB/s up to 400 GiB) lets AWS pick it;
+  # set either to provision more, at gp3's extra cost
+  iops               = var.storage_iops
+  storage_throughput = var.storage_throughput
+  # AWS's own aws/rds key by default; a customer-managed key only if given one. Both are set
+  # once, at creation: RDS can't re-encrypt existing storage or Performance Insights with a
+  # different key, so changing kms_key_arn later replaces the instance.
+  kms_key_id = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   db_name  = var.database_name
   username = var.admin_username
@@ -112,6 +120,7 @@ resource "aws_db_instance" "this" {
   apply_immediately           = !local.prod
 
   performance_insights_enabled    = true
+  performance_insights_kms_key_id = var.kms_key_arn != "" ? var.kms_key_arn : null
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
 
   # A non-production database can be destroyed without a final snapshot, so tofu destroy works

@@ -45,14 +45,18 @@ resource "google_sql_database_instance" "this" {
   region              = var.region
   database_version    = var.database_version
   deletion_protection = var.deletion_protection
+  # Google's own key by default; a customer-managed one only if given one. Set once, at
+  # creation: Cloud SQL can't re-encrypt an existing instance with a different key.
+  encryption_key_name = var.kms_key_name != "" ? var.kms_key_name : null
 
   settings {
     tier                        = var.tier
     edition                     = "ENTERPRISE"
     availability_type           = local.prod ? "REGIONAL" : "ZONAL"
     disk_type                   = "PD_SSD"
-    disk_size                   = 10
+    disk_size                   = var.disk_size_gb
     disk_autoresize             = true
+    disk_autoresize_limit       = var.disk_autoresize_limit_gb
     deletion_protection_enabled = var.deletion_protection
     # Only the Cloud SQL connectors may connect: each connection is authorized with IAM and
     # encrypted with certificates the connector fetches for the instance

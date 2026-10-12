@@ -23,9 +23,9 @@ The one-time account setup (state bucket, GitHub OIDC role) is in the
 [database.md](database.md).
 
 - [ECS Fargate](#ecs-fargate)
-  - [Request path](#ecs-request-path) · [Network](#ecs-network) · [Security groups](#ecs-security-groups) · [Compute](#ecs-compute) · [Registry](#ecs-registry) · [Database](#ecs-database) · [Identity and access](#ecs-identity-and-access) · [Logs and metrics](#ecs-logs-and-metrics) · [Every resource](#ecs-every-resource) · [Deployment flow](#ecs-deployment-flow) · [Verify a deployment](#ecs-verify-a-deployment)
+  - [Request path](#ecs-request-path) · [Network](#ecs-network) · [Security groups](#ecs-security-groups) · [Compute](#ecs-compute) · [Registry](#ecs-registry) · [Database](#ecs-database) · [Encryption](#ecs-encryption) · [Identity and access](#ecs-identity-and-access) · [Logs and metrics](#ecs-logs-and-metrics) · [Every resource](#ecs-every-resource) · [Deployment flow](#ecs-deployment-flow) · [Verify a deployment](#ecs-verify-a-deployment)
 - [EKS Auto Mode](#eks-auto-mode)
-  - [Request path](#eks-request-path) · [Network](#eks-network) · [Cluster](#eks-cluster) · [Pod identities](#eks-pod-identities) · [Database](#eks-database) · [Logs and metrics](#eks-logs-and-metrics) · [Every resource](#eks-every-resource) · [Deployment flow](#eks-deployment-flow) · [Verify a deployment](#eks-verify-a-deployment)
+  - [Request path](#eks-request-path) · [Network](#eks-network) · [Cluster](#eks-cluster) · [Pod identities](#eks-pod-identities) · [Database](#eks-database) · [Encryption](#eks-encryption) · [Logs and metrics](#eks-logs-and-metrics) · [Every resource](#eks-every-resource) · [Deployment flow](#eks-deployment-flow) · [Verify a deployment](#eks-verify-a-deployment)
 - [Check it without an AWS account](#check-it-without-an-aws-account)
 - [Not included](#not-included)
 
@@ -161,7 +161,8 @@ From [`infra/modules/aws-database`](../infra/modules/aws-database), shared with 
 | Setting | Value |
 | --- | --- |
 | Instance `aws_db_instance.this` | `multi-cloud-app-dev`, PostgreSQL 17 (newest minor version, upgraded automatically in the maintenance window), `db.t4g.micro` (`database_instance_class`) |
-| Storage | 20 GiB gp3, growing up to 100 GiB, encrypted |
+| Storage (block storage) | 20 GiB gp3 (`allocated_storage`), growing up to 100 GiB (`max_allocated_storage`); IOPS and throughput sit at gp3's free per-GiB baseline unless `storage_iops`/`storage_throughput` provision more |
+| Encryption | AWS's own `aws/rds` key by default; `kms_key_arn` (shared with this target's image repository and container logs, see [Encryption](#ecs-encryption)) encrypts storage and Performance Insights instead. Set once, at creation: changing it later replaces the instance |
 | Database and administrator | Database `app`; administrator `dbadmin`, whose password RDS generates, stores in Secrets Manager and rotates (`manage_master_user_password`) |
 | Sign-in | IAM database authentication on; `app_user` is a member of `rds_iam`, so RDS accepts only IAM tokens for it |
 | Network | Subnet group `aws_db_subnet_group.this` (the database subnets), group `aws_security_group.this`, no public endpoint |
@@ -175,6 +176,24 @@ From [`infra/modules/aws-database`](../infra/modules/aws-database), shared with 
 The migrate container creates `app_user` (`CREATE ROLE app_user LOGIN; GRANT rds_iam TO app_user`)
 and grants it read and write access to the `app` schema's tables; see
 [database.md](database.md#migrations).
+
+<a id="ecs-encryption"></a>
+
+### Encryption
+
+AWS's own keys (`aws/rds`, `aws/ecr`, `aws/logs`) encrypt the database, the image repository and
+container logs by default. `enable_customer_managed_key` creates one KMS key, `aws_kms_key.this`
+(alias `aws_kms_alias.this`), that all three use instead: the database's storage and Performance
+Insights (`kms_key_arn`, passed to the module), the repository's images
+(`aws_ecr_repository.app.encryption_configuration.kms_key`) and the container logs
+(`aws_cloudwatch_log_group.app.kms_key_id`). The key's policy grants the account root full
+access and CloudWatch Logs a grant scoped to this account's log groups; the repository and the
+database instead use grants OpenTofu's own credentials create, which the root statement covers.
+
+The log group can move to the key, or back to AWS's own, at any time. The repository and the
+database can't: enabling this after either already exists forces OpenTofu to replace it, since
+neither can re-encrypt existing images or storage with a different key. Set it before the first
+apply.
 
 <a id="ecs-identity-and-access"></a>
 
@@ -257,6 +276,8 @@ zone; with a certificate, the HTTPS listener and its ingress rule are added.
 | `aws_vpc_security_group_ingress_rule.task_from_alb` | Tasks take 8000 from the load balancer |
 | `aws_vpc_security_group_egress_rule.task_https` | Tasks out on 443 |
 | `aws_vpc_security_group_egress_rule.task_database` | Tasks out to the database on 5432 |
+| `aws_kms_key.this` | With `enable_customer_managed_key`: encrypts the repository, logs and database |
+| `aws_kms_alias.this` | `alias/multi-cloud-app-dev` |
 | `aws_ecr_repository.app` | Image repository |
 | `aws_ecr_lifecycle_policy.app` | Keeps the 30 newest images |
 | `aws_ecs_cluster.app` | ECS cluster |
@@ -496,6 +517,16 @@ than a security group of their own. The migration Job reads the administrator's 
 Secrets Manager itself (`DB_PASSWORD_SECRET_ARN`) with its Pod Identity role; OpenTofu passes the
 address, the secret's ARN and the subnets to the chart through the `helm_values` output.
 
+<a id="eks-encryption"></a>
+
+### Encryption
+
+Separate from `module.eks`'s own key, which only encrypts Kubernetes secrets,
+`enable_customer_managed_key` creates one KMS key, `aws_kms_key.this` (alias `aws_kms_alias.this`),
+for this target's image repository and database: the same pattern as [ECS's](#ecs-encryption),
+without the container logs (EKS keeps none of its own; see [Logs and metrics](#eks-logs-and-metrics)).
+Enabling it after the repository or the database already exist forces OpenTofu to replace them.
+
 <a id="eks-logs-and-metrics"></a>
 
 ### Logs and metrics
@@ -568,6 +599,8 @@ What one `tofu apply` in `infra/eks` creates for `dev`, as `scripts/inventory.sh
 | `module.eks.aws_eks_access_entry.this["cluster_creator"]` | Access for the deploy role |
 | `module.eks.aws_eks_access_policy_association.this["cluster_creator_admin"]` | `AmazonEKSClusterAdminPolicy` for it |
 | `module.eks.time_sleep.this[0]` | 30-second wait for the data plane |
+| `aws_kms_key.this` | With `enable_customer_managed_key`: encrypts the repository and database |
+| `aws_kms_alias.this` | `alias/multi-cloud-dev` |
 | `aws_ecr_repository.app` | Image repository `multi-cloud-dev-app` |
 | `aws_ecr_lifecycle_policy.app` | Keeps the 30 newest images |
 | `aws_iam_role.app` | The service's Pod Identity role |
@@ -701,7 +734,8 @@ Deliberately left out, and what adding each would take:
 - **Alarms, dashboards and budgets:** CPU, storage, connections, failover, service and load
   balancer alarms exist (`alert_email` wires them to SNS), and a dashboard puts them together;
   cost budgets don't.
-- **Customer-managed keys** for ECR, CloudWatch Logs and Performance Insights (AWS-managed keys
-  encrypt them now; EKS secrets already use a customer-managed key).
+- **Customer-managed keys** for ECR, CloudWatch Logs, Performance Insights and database storage
+  exist, gated behind `enable_customer_managed_key` (off by default; EKS's own Kubernetes secrets
+  already use a customer-managed key regardless).
 - **Cross-region backups or replicas** of the database.
 - **A private Kubernetes API endpoint only:** it needs self-hosted runners inside the VPC.

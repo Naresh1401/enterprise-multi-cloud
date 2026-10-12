@@ -49,6 +49,8 @@ Use this before treating a deployment as production.
 - [ ] `/api/items` sits behind authentication before it holds real data
 - [ ] `alert_email` is set on every deployment target so the connections, CPU, storage and
       (`prod`) failover/restart alarms notify someone
+- [ ] Whether `enable_customer_managed_key` is needed is decided before the first apply: turning
+      it on afterward replaces the database (and, with it, ECR/Artifact Registry images)
 
 ## Delivery
 

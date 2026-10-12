@@ -23,9 +23,9 @@ for GitHub) is in the [GCP deployment guide](gcp-deployment.md), the chart in
 [database.md](database.md).
 
 - [Cloud Run](#cloud-run)
-  - [Request path](#cloud-run-request-path) · [Network](#cloud-run-network) · [Compute](#cloud-run-compute) · [Registry](#cloud-run-registry) · [Database](#cloud-run-database) · [Identity and access](#cloud-run-identity-and-access) · [Logs and metrics](#cloud-run-logs-and-metrics) · [Every resource](#cloud-run-every-resource) · [Deployment flow](#cloud-run-deployment-flow) · [Verify a deployment](#cloud-run-verify-a-deployment)
+  - [Request path](#cloud-run-request-path) · [Network](#cloud-run-network) · [Compute](#cloud-run-compute) · [Registry](#cloud-run-registry) · [Database](#cloud-run-database) · [Encryption](#cloud-run-encryption) · [Identity and access](#cloud-run-identity-and-access) · [Logs and metrics](#cloud-run-logs-and-metrics) · [Every resource](#cloud-run-every-resource) · [Deployment flow](#cloud-run-deployment-flow) · [Verify a deployment](#cloud-run-verify-a-deployment)
 - [GKE Autopilot](#gke-autopilot)
-  - [Request path](#gke-request-path) · [Network](#gke-network) · [Cluster](#gke-cluster) · [Workload identities](#gke-workload-identities) · [Database](#gke-database) · [Logs and metrics](#gke-logs-and-metrics) · [Every resource](#gke-every-resource) · [Deployment flow](#gke-deployment-flow) · [Verify a deployment](#gke-verify-a-deployment)
+  - [Request path](#gke-request-path) · [Network](#gke-network) · [Cluster](#gke-cluster) · [Workload identities](#gke-workload-identities) · [Database](#gke-database) · [Encryption](#gke-encryption) · [Logs and metrics](#gke-logs-and-metrics) · [Every resource](#gke-every-resource) · [Deployment flow](#gke-deployment-flow) · [Verify a deployment](#gke-verify-a-deployment)
 - [Check it without a Google Cloud project](#check-it-without-a-google-cloud-project)
 - [Not included](#not-included)
 
@@ -128,7 +128,8 @@ From [`infra/modules/gcp-database`](../infra/modules/gcp-database), shared with 
 | Setting | Value |
 | --- | --- |
 | Instance `google_sql_database_instance.this` | `multi-cloud-app-dev`, `POSTGRES_17`, Enterprise edition, `db-custom-1-3840` (1 vCPU, 3.75 GB, 100 connections; `database_tier`) |
-| Storage | 10 GB SSD, growing automatically |
+| Storage (block storage) | 10 GB SSD (`disk_size_gb`), growing automatically with no limit (`disk_autoresize_limit_gb`, 0 by default) |
+| Encryption | Google's own key by default; `kms_key_name` (shared with this target's image repository, see [Encryption](#cloud-run-encryption)) encrypts it instead. Set once, at creation: changing it later replaces the instance |
 | Network | Private IP from the private services range; no public IP (`ipv4_enabled = false`) |
 | Connections | Only through the Cloud SQL connectors (`connector_enforcement = REQUIRED`), which authorize every connection with IAM (`roles/cloudsql.client`) and encrypt it with certificates they fetch; unencrypted connections are refused (`ssl_mode = ENCRYPTED_ONLY`) |
 | Sign-in | IAM database authentication (`cloudsql.iam_authentication=on`); no built-in user has a password |
@@ -143,6 +144,22 @@ From [`infra/modules/gcp-database`](../infra/modules/gcp-database), shared with 
 The migration job doesn't create the service's database user (Cloud SQL did, from the IAM user
 resource); it grants it read and write access to the `app` schema's tables; see
 [database.md](database.md#migrations).
+
+<a id="cloud-run-encryption"></a>
+
+### Encryption
+
+Google's own keys encrypt the database and the image repository by default.
+`enable_customer_managed_key` creates one Cloud KMS key ring and key, `google_kms_key_ring.this`
+and `google_kms_crypto_key.this`, that both use instead (`kms_key_name`, passed to the module and
+set directly on `google_artifact_registry_repository.app_repo`). Cloud SQL and Artifact Registry
+each encrypt through their own Google-managed service agent, not the identity running OpenTofu:
+`google_kms_crypto_key_iam_member.cloudsql` and `.artifactregistry` grant
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` to `service-<project number>@gcp-sa-cloud-sql.iam.gserviceaccount.com`
+and `...@gcp-sa-artifactregistry.iam.gserviceaccount.com`.
+
+Enabling it after the instance or the repository already exist forces OpenTofu to replace them:
+neither can re-encrypt existing data with a different key. Set it before the first apply.
 
 <a id="cloud-run-identity-and-access"></a>
 
@@ -189,6 +206,10 @@ What one `tofu apply` in `infra/gcp` creates, as `scripts/inventory.sh gcp` list
 | --- | --- |
 | `google_compute_network.this` | The VPC |
 | `google_compute_subnetwork.run` | Subnet for Direct VPC egress, with flow logs |
+| `google_kms_key_ring.this` | With `enable_customer_managed_key`: holds the key |
+| `google_kms_crypto_key.this` | Encrypts the repository and database instead of Google's own keys |
+| `google_kms_crypto_key_iam_member.cloudsql` | Lets Cloud SQL's service agent use it |
+| `google_kms_crypto_key_iam_member.artifactregistry` | Lets Artifact Registry's service agent use it |
 | `google_artifact_registry_repository.app_repo` | Image repository |
 | `module.database.google_compute_global_address.private_services` | The `/20` reserved for Cloud SQL |
 | `module.database.google_service_networking_connection.private_services` | Peering with Google's service network |
@@ -387,6 +408,14 @@ The same module and settings as [Cloud Run's database](#cloud-run-database), nam
 which the chart's network policy allows only to the private services range, and reach the Cloud
 SQL Admin API on 443.
 
+<a id="gke-encryption"></a>
+
+### Encryption
+
+`enable_customer_managed_key` creates one Cloud KMS key, `google_kms_crypto_key.this`, for this
+target's image repository and database: the same pattern as [Cloud Run's](#cloud-run-encryption).
+Enabling it after the instance or the repository already exist forces OpenTofu to replace them.
+
 <a id="gke-logs-and-metrics"></a>
 
 ### Logs and metrics
@@ -412,6 +441,10 @@ What one `tofu apply` in `infra/gke` creates, as `scripts/inventory.sh gke` list
 | `google_compute_subnetwork.this` | Node subnet with pod and service ranges, flow logs |
 | `google_compute_router.this` | Cloud Router for NAT |
 | `google_compute_router_nat.this` | Cloud NAT for the private nodes |
+| `google_kms_key_ring.this` | With `enable_customer_managed_key`: holds the key |
+| `google_kms_crypto_key.this` | Encrypts the repository and database instead of Google's own keys |
+| `google_kms_crypto_key_iam_member.cloudsql` | Lets Cloud SQL's service agent use it |
+| `google_kms_crypto_key_iam_member.artifactregistry` | Lets Artifact Registry's service agent use it |
 | `google_artifact_registry_repository.app` | Image repository `multi-cloud-app-gke` |
 | `google_container_cluster.this` | The Autopilot cluster |
 | `google_artifact_registry_repository_iam_member.nodes_pull` | Nodes may read images |
@@ -523,8 +556,8 @@ and [`infra/modules/gcp-database/tests`](../infra/modules/gcp-database/tests).
   Google-managed certificate and a domain would add TLS. (Cloud Run's URL is HTTPS already.)
 - **A custom domain for Cloud Run** (a domain mapping or a load balancer with a serverless NEG).
 - **Cloud Armor** (web application firewall) and **Identity-Aware Proxy** in front of either.
-- **Customer-managed encryption keys** for Cloud SQL, Artifact Registry and the cluster; Google
-  encrypts them with its own keys now.
+- **Customer-managed encryption keys** for Cloud SQL and Artifact Registry exist, gated behind
+  `enable_customer_managed_key` (off by default); GKE's own cluster encryption is unaffected.
 - **VPC Service Controls** around the project's APIs, and **Binary Authorization** for images.
 - **Budgets** in Cloud Billing (`alert_email` wires the CPU, disk, connections, error rate,
   latency, node CPU and container restart alerting policies, and a dashboard puts them together).

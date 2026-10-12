@@ -45,6 +45,15 @@ run "dev" {
     error_message = "Unencrypted connections must be refused."
   }
   assert {
+    condition = (
+      google_sql_database_instance.this.settings[0].disk_type == "PD_SSD" &&
+      google_sql_database_instance.this.settings[0].disk_size == 10 &&
+      google_sql_database_instance.this.settings[0].disk_autoresize &&
+      google_sql_database_instance.this.settings[0].disk_autoresize_limit == 0
+    )
+    error_message = "Storage must be 10 GiB SSD that grows with no limit by default."
+  }
+  assert {
     condition     = google_sql_database_instance.this.database_version == "POSTGRES_17" && google_sql_database_instance.this.settings[0].edition == "ENTERPRISE"
     error_message = "The instance must run PostgreSQL 17 on the Enterprise edition."
   }
@@ -156,5 +165,35 @@ run "prod" {
       google_sql_database_instance.this.settings[0].backup_configuration[0].backup_retention_settings[0].retained_backups == 14
     )
     error_message = "prod must be regional (high availability) with 14 backups kept."
+  }
+}
+
+run "customer_managed_key" {
+  command = plan
+
+  variables {
+    kms_key_name = "projects/example-project/locations/us-central1/keyRings/multi-cloud-dev/cryptoKeys/database"
+  }
+
+  assert {
+    condition     = google_sql_database_instance.this.encryption_key_name == "projects/example-project/locations/us-central1/keyRings/multi-cloud-dev/cryptoKeys/database"
+    error_message = "kms_key_name must encrypt the instance with that key."
+  }
+}
+
+run "provisioned_storage" {
+  command = plan
+
+  variables {
+    disk_size_gb             = 50
+    disk_autoresize_limit_gb = 200
+  }
+
+  assert {
+    condition = (
+      google_sql_database_instance.this.settings[0].disk_size == 50 &&
+      google_sql_database_instance.this.settings[0].disk_autoresize_limit == 200
+    )
+    error_message = "disk_size_gb and disk_autoresize_limit_gb must size and cap the instance's storage."
   }
 }

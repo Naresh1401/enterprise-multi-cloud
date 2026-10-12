@@ -180,11 +180,16 @@ scripts/                     Deployment checks, resource inventory, local pipeli
   network policy that admits only the HTTP port.
 - Every target and database has its own CPU, storage, connection, restart or error rate alarms
   and a dashboard; set `alert_email` to notify someone, or watch them unnotified by default.
+- Each database and image repository (and, on AWS, container logs) encrypts with the cloud's own
+  key by default; set `enable_customer_managed_key` before the first apply for a key this account
+  controls instead.
 
 ## Costs
 
 Clusters, databases, NAT gateways and load balancers bill while they exist, even when idle. The
-alarms and dashboards this adds are a few cents a month per target. To remove a
+alarms and dashboards this adds are a few cents a month per target. `enable_customer_managed_key`
+adds its own small monthly cost (a KMS key or Key Vault) and, enabled on an existing database,
+replaces it; it's off by default. To remove a
 target, run `tofu destroy` in its `infra/` folder with the same backend settings and variables the
 workflow uses. GKE clusters have deletion protection on by default; set `deletion_protection =
 false` and apply before destroying.

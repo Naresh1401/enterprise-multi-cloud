@@ -104,3 +104,19 @@ run "alerts" {
     error_message = "alert_email must notify the cluster's alerts through its own channel."
   }
 }
+
+run "customer_managed_key" {
+  command = plan
+
+  variables {
+    enable_customer_managed_key = true
+  }
+
+  assert {
+    condition = (
+      google_kms_crypto_key_iam_member.cloudsql[0].member == "serviceAccount:service-123456789012@gcp-sa-cloud-sql.iam.gserviceaccount.com" &&
+      google_artifact_registry_repository.app.kms_key_name == google_kms_crypto_key.this[0].id
+    )
+    error_message = "enable_customer_managed_key must grant Cloud SQL's service agent and encrypt the repository with this target's own key."
+  }
+}

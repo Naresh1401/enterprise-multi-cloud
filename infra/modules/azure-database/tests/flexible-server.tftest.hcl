@@ -115,3 +115,20 @@ run "prod" {
     error_message = "prod must be zone-redundant with 14 days of backups."
   }
 }
+
+run "customer_managed_key" {
+  command = plan
+
+  variables {
+    key_vault_key_id                    = "https://mock-kv.vault.azure.net/keys/database/abcdef0123456789"
+    key_vault_user_assigned_identity_id = "/subscriptions/00000000-0000-0000-0000-0000000000bb/resourceGroups/rg-mock/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mock-key"
+  }
+
+  assert {
+    condition = (
+      azurerm_postgresql_flexible_server.this.identity[0].identity_ids == toset(["/subscriptions/00000000-0000-0000-0000-0000000000bb/resourceGroups/rg-mock/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mock-key"]) &&
+      azurerm_postgresql_flexible_server.this.customer_managed_key[0].key_vault_key_id == "https://mock-kv.vault.azure.net/keys/database/abcdef0123456789"
+    )
+    error_message = "key_vault_key_id must encrypt the server, wrapped by key_vault_user_assigned_identity_id."
+  }
+}

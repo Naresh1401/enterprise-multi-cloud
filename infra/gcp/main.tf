@@ -65,6 +65,7 @@ module "database" {
   deletion_protection   = var.deletion_protection
   labels                = local.labels
   notification_channels = local.notification_channels
+  kms_key_name          = local.kms_key_name
 }
 
 resource "google_artifact_registry_repository" "app_repo" {
@@ -73,6 +74,9 @@ resource "google_artifact_registry_repository" "app_repo" {
   description   = "Container images for ${var.service_name}"
   format        = "DOCKER"
   labels        = local.labels
+  # Google's own key by default; a customer-managed one only if given one. Set once, at
+  # creation: changing it later replaces the repository and its images.
+  kms_key_name = local.kms_key_name != "" ? local.kms_key_name : null
 }
 
 # The migrations, as a job. Each deployment passes a new migration_token, and OpenTofu then

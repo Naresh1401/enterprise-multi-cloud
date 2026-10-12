@@ -41,6 +41,18 @@ variable "database_name" {
   description = "Database the service uses"
 }
 
+variable "disk_size_gb" {
+  type        = number
+  default     = 10
+  description = "Initial storage in GiB"
+}
+
+variable "disk_autoresize_limit_gb" {
+  type        = number
+  default     = 0
+  description = "Storage autoscaling limit in GiB; 0 means no limit (Cloud SQL's own default)"
+}
+
 variable "deletion_protection" {
   type        = bool
   default     = true
@@ -63,4 +75,10 @@ variable "connection_alarm_threshold" {
   type        = number
   default     = 80
   description = "Open connections sustained for 15 minutes that triggers the connections alert"
+}
+
+variable "kms_key_name" {
+  type        = string
+  default     = ""
+  description = "Customer-managed Cloud KMS key for the instance; empty uses Google's own key. Can only be set when the instance is created, not added later"
 }

@@ -89,3 +89,15 @@ variable "connection_alarm_threshold" {
   default     = 80
   description = "Active connections sustained for 15 minutes that triggers the connections alert"
 }
+
+variable "key_vault_key_id" {
+  type        = string
+  default     = ""
+  description = "Key Vault key for data encryption; empty uses Azure's own key. Can only be set when the server is created, not added later"
+}
+
+variable "key_vault_user_assigned_identity_id" {
+  type        = string
+  default     = ""
+  description = "User-assigned identity the server uses to wrap and unwrap key_vault_key_id; required together with it"
+}
