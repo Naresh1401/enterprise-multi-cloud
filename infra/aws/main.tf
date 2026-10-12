@@ -83,6 +83,7 @@ module "database" {
   subnet_ids                = module.vpc.database_subnets
   client_security_group_ids = [aws_security_group.task.id]
   instance_class            = var.database_instance_class
+  alert_email               = var.alert_email
 }
 
 # Phase 1 of a deployment applies only this, so the image can be pushed before the service exists

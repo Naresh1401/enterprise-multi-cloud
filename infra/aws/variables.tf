@@ -68,3 +68,9 @@ variable "tags" {
   default     = {}
   description = "Extra tags for every resource"
 }
+
+variable "alert_email" {
+  type        = string
+  default     = ""
+  description = "Email address for CPU, storage, connections, 5xx rate and failover alarms; empty leaves them unmonitored"
+}
