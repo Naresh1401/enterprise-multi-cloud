@@ -19,7 +19,7 @@ concurrency:
 jobs:
   python:
     name: Lint, test and audit
-    uses: Naresh1401/github-cicd-workflows/.github/workflows/python-ci.yml@v1
+    uses: Naresh1401/github-cicd-workflows/.github/workflows/python-ci.yml@v2
     with:
       lint: full
       # The database tests run against the PostgreSQL from docker-compose.yml
@@ -31,7 +31,7 @@ jobs:
 
   repo-lint:
     name: Lint workflows, scripts and Dockerfile
-    uses: Naresh1401/github-cicd-workflows/.github/workflows/repo-lint.yml@v1
+    uses: Naresh1401/github-cicd-workflows/.github/workflows/repo-lint.yml@v2
     with:
       workflow-shellcheck: true
       shellcheck-severity: style
@@ -39,7 +39,7 @@ jobs:
 
   infrastructure:
     name: OpenTofu
-    uses: Naresh1401/github-cicd-workflows/.github/workflows/iac.yml@v1
+    uses: Naresh1401/github-cicd-workflows/.github/workflows/iac.yml@v2
     with:
       directories: >-
         ["infra/aws", "infra/azure", "infra/gcp", "infra/eks", "infra/gke", "infra/aks",
@@ -49,7 +49,7 @@ jobs:
   container:
     name: Image
     needs: python
-    uses: Naresh1401/github-cicd-workflows/.github/workflows/container.yml@v1
+    uses: Naresh1401/github-cicd-workflows/.github/workflows/container.yml@v2
     with:
       version-build-arg: APP_VERSION
       smoke-test: true
@@ -59,7 +59,7 @@ jobs:
 
   helm:
     name: Helm chart
-    uses: Naresh1401/github-cicd-workflows/.github/workflows/helm.yml@v1
+    uses: Naresh1401/github-cicd-workflows/.github/workflows/helm.yml@v2
     with:
       chart: deploy/helm/multi-cloud-app
       # Each cloud's values alone, then with the database values its OpenTofu outputs
